@@ -11,3 +11,8 @@ license = "MIT"
 # Public Dependencies
 rug = "1.15.0"
 ndarray = "0.15.4"
+
+[package.metadata.docs.rs]
+rustdoc-args = [
+    "--html-in-header", "./docs/katex-header.html",
+]

@@ -1,0 +1,2 @@
+[alias]
+latex-doc = ["rustdoc", "--", "--html-in-header", "./docs/katex-header.html"]
