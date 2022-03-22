@@ -1,0 +1,10 @@
+[package]
+name = "aph-cli"
+version = "0.1.0"
+description = "A tool for acyclic phase-type (APH) distributions."
+authors = ["Maximilian Köhl <mail@koehlma.de>"]
+edition = "2021"
+repository = "https://github.com/koehlma/aph-rs"
+
+[dependencies]
+aph = { path = "../aph" }

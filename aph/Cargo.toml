@@ -1,0 +1,13 @@
+[package]
+name = "aph"
+version = "0.1.0"
+description = "A library for acyclic phase-type (APH) distributions."
+authors = ["Maximilian Köhl <mail@koehlma.de>"]
+edition = "2021"
+repository = "https://github.com/koehlma/aph-rs"
+
+
+[dependencies]
+# Public Dependencies
+rug = "1.15.0"
+ndarray = "0.15.4"
