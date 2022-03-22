@@ -1,0 +1,13 @@
+{
+    "version": "0.2",
+    "words": [
+        "bidiagonal",
+        "Bidiagonal",
+        "infty",
+        "inplace",
+        "linalg",
+        "mathord",
+        "repr",
+        "thiserror"
+    ]
+}
