@@ -5,7 +5,7 @@ description = "A library for acyclic phase-type (APH) distributions."
 authors = ["Maximilian Köhl <mail@koehlma.de>"]
 edition = "2021"
 repository = "https://github.com/koehlma/aph-rs"
-
+license = "MIT"
 
 [dependencies]
 # Public Dependencies

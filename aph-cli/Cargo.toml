@@ -5,6 +5,7 @@ description = "A tool for acyclic phase-type (APH) distributions."
 authors = ["Maximilian Köhl <mail@koehlma.de>"]
 edition = "2021"
 repository = "https://github.com/koehlma/aph-rs"
+license = "MIT"
 
 [dependencies]
-aph = { path = "../aph" }
+aph = { version = "0.1.0", path = "../aph" }
