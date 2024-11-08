@@ -1,15 +1,18 @@
 [package]
 name = "aph"
-version = "0.2.1"
+version = "0.2.2"
 description = "A library for acyclic phase-type (APH) distributions."
-authors = ["Maximilian Köhl <mail@koehlma.de>"]
+authors = ["Maximilian Köhl & Nazareno Garagiola <garagiola@depend.uni-saarland.de>"]
 edition = "2021"
-repository = "https://github.com/koehlma/aph-rs"
+repository = "https://github.com/NazaGara/aph-rs"
 license = "MIT"
 
 [dependencies]
-rug = "1.15.0"
-thiserror = "1.0.30"
+itertools = "0.13.0"
+ndarray = "0.16.1"
+num-traits = "0.2.19"
+rug = "1.26.1"
+thiserror = "1.0.67"
 
 [package.metadata.docs.rs]
 rustdoc-args = [

@@ -41,6 +41,14 @@ impl<F: PseudoField> Vector<F> {
         }
     }
 
+    pub fn one_and_zeros(idx:usize, size: usize) -> Self{
+        let mut vector = Vector::zero(size);
+        if let Some(first) = vector.elements.get_mut(idx) {
+            *first = F::one(); // set the first element to 1
+        }
+        vector
+    }
+
     pub fn size(&self) -> usize {
         self.elements.len()
     }

@@ -54,12 +54,12 @@
 
 use std::ops::{AddAssign, DivAssign, MulAssign, SubAssign};
 
+use super::{One, Zero};
 use rug::{
     ops::{AddAssignRound, DivAssignRound, MulAssignRound, NegAssign, SubAssignRound},
     Complete,
 };
-
-use super::{One, Zero};
+use std::fmt::Debug;
 
 pub trait FromRational: Sized {
     fn from_rational(nominator: &str, denominator: &str) -> Self;
@@ -85,7 +85,9 @@ pub enum Round {
 /// A [`SparseField`] is a numeric type supporting the usual arithmetic operators of
 /// fields but unable to exactly represent some results of some of these operators, e.g.,
 /// floating-point numbers.
-pub trait SparseField: Sized + Clone + Ord + Eq + Zero + One + FromRational + Into<f64> {
+pub trait SparseField:
+    Debug + Sized + Clone + Ord + Eq + Zero + One + FromRational + Into<f64>
+{
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
 
@@ -98,7 +100,9 @@ pub trait SparseField: Sized + Clone + Ord + Eq + Zero + One + FromRational + In
 /// A [`PseudoField`] is a numeric type supporting the usual arithmetic operators of
 /// fields but without any guarantee that the field axioms are satisfied, e.g.,
 /// rational numbers, floating-point numbers, or intervals.
-pub trait PseudoField: Sized + Clone + PartialOrd + PartialEq + Zero + One + FromRational {
+pub trait PseudoField:
+    Debug + Sized + Clone + PartialOrd + PartialEq + Zero + One + FromRational
+{
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
 
@@ -169,6 +173,12 @@ impl Zero for Float64 {
     }
 }
 
+impl From<f64> for Float64 {
+    fn from(value: f64) -> Self {
+        Self(rug::Float::with_val_64(53, value).into())
+    }
+}
+
 impl From<Float64> for f64 {
     fn from(float: Float64) -> Self {
         float.0.as_float().to_f64()
@@ -221,7 +231,7 @@ impl SparseField for Float64 {
 /// An arbitrary-precision rational number implementing [`Field`].
 ///
 /// Currently this is based on [`rug::Rational`].
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Rational(rug::Rational);
 
 impl From<Rational> for f64 {
@@ -344,3 +354,98 @@ impl<F: SparseField> PartialOrd for IntervalField<F> {
         }
     }
 }
+
+// //// A 64-bit non-precision floating-point type implementing [`SparseField`].
+// ////
+// //// Currently this is based on [`f64`] but in the future we may implement this
+// //// type using architecture specific features.
+// ///#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+// ///pub struct NPFloat64(f64);
+
+// impl One for f64 {
+//     fn one() -> Self {
+//         1.0 as f64
+//     }
+
+//     fn is_one(&self) -> bool {
+//         *self == 1.0
+//     }
+// }
+
+// impl Zero for f64 {
+//     fn zero() -> Self {
+//         0.0 as f64
+//     }
+
+//     fn is_zero(&self) -> bool {
+//         *self == 0.0
+//     }
+// }
+
+// impl FromRational for f64 {
+//     fn from_rational(nominator: &str, denominator: &str) -> Self {
+//         let result = rug::Rational::parse(format!("{nominator}/{denominator}"))
+//             .map(|incomplete| incomplete.complete());
+//         if result.is_err() && denominator == "1" {
+//             nominator
+//                 .parse()
+//                 .map(|value| rug::Rational::from_f64(value).unwrap())
+//                 .unwrap()
+//                 .to_f64()
+//         } else {
+//             result.unwrap().to_f64()
+//         }
+//     }
+// }
+
+// impl PseudoField for f64 {
+//     fn neg_assign(&mut self) {
+//         self.neg_assign();
+//     }
+
+//     fn abs_assign(&mut self) {
+//         self.0.abs_mut();
+//     }
+
+//     fn add_assign(&mut self, rhs: &Self) {
+//         self.0.add_assign(&rhs.0);
+//     }
+
+//     fn sub_assign(&mut self, rhs: &Self) {
+//         self.0.sub_assign(&rhs.0);
+//     }
+
+//     fn mul_assign(&mut self, rhs: &Self) {
+//         self.0.mul_assign(&rhs.0);
+//     }
+
+//     fn div_assign(&mut self, rhs: &Self) {
+//         self.0.div_assign(&rhs.0);
+//     }
+// }
+
+// impl SparseField for f64 {
+//     fn neg_assign(&mut self) {
+//         self.neg_assign()
+//     }
+
+//     fn abs_assign(&mut self) {
+//         self.abs_mut();
+//     }
+
+//     fn add_assign(&mut self, rhs: &Self, round: Round) {
+//         self.add_assign_round(rhs, round_to_rug_round(round));
+//     }
+
+//     fn sub_assign(&mut self, rhs: &Self, round: Round) {
+//         self.sub_assign_round(rhs, round_to_rug_round(round));
+//     }
+
+//     fn mul_assign(&mut self, rhs: &Self, round: Round) {
+//         self.mul_assign_round(rhs, round_to_rug_round(round));
+//     }
+
+//     fn div_assign(&mut self, rhs: &Self, round: Round) {
+//         self.div_assign_round(rhs, round_to_rug_round(round));
+//     }
+// }
