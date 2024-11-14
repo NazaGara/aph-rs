@@ -4,17 +4,15 @@ use clap::Parser;
 
 use aph::{
     formats,
-    linalg::{
-        fields::{Float64, PseudoField},
-        Vector,
-    },
+    linalg::fields::{Float64, PseudoField},
     Aph, Triangular,
 };
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
-    file: std::path::PathBuf,
+    file1: std::path::PathBuf,
+    file2: std::path::PathBuf,
 }
 
 pub fn parse_file<F: PseudoField>(path: &Path) -> Aph<F, Triangular<F>> {
@@ -29,43 +27,16 @@ pub fn parse_file<F: PseudoField>(path: &Path) -> Aph<F, Triangular<F>> {
 fn main() {
     let args = Args::parse();
 
-    // let dist = parse_file::<Float64>(&args.file);
+    let dist1: Aph<Float64, aph::TriangularArray<Float64>> =
+        formats::tra::parse_array::<Float64>(&std::fs::read_to_string(&args.file1).unwrap())
+            .unwrap();
 
-    // let bidiagonal = dist.to_bidiagonal();
-    // println!("{:?}", bidiagonal);
+    let dist2: Aph<Float64, aph::TriangularArray<Float64>> =
+        formats::tra::parse_array::<Float64>(&std::fs::read_to_string(args.file2).unwrap())
+            .unwrap();
 
-    let dist =
-        formats::tra::parse_array::<Float64>(&std::fs::read_to_string(args.file).unwrap()).unwrap();
+    let bidi1 = dist1.to_bidiagonal();
+    let bidi2 = dist1.to_bidiagonal();
 
-    let bidi = dist.to_bidiagonal();
-
-    println!("{:?}\n\n", bidi);
-
-    let m1 = bidi.repr().clone();
-    let m2 = bidi.repr().clone();
-
-    let m = Aph::new(
-        Vector::one_and_zeros(0, m1.0.len() * m2.0.len()),
-        m1.kron_sum(&m2),
-    );
-
-    println!("{:?}", m);
-
-    // let bidiagonal = m.to_bidiagonal();
-
-    // println!("{:?}", bidiagonal);
-
-    // let m1 = dist.repr().clone();
-    // let m2 = dist.repr().clone();
-
-    // let m = Aph::new(
-    //     Vector::one_and_zeros(0, m1.size * m2.size),
-    //     m1.kron_product(&m2),
-    // );
-
-    // println!("{:?}", m);
-
-    // let bidiagonal = m.to_bidiagonal();
-
-    // println!("{:?}", bidiagonal);
+    println!("{} vs {} \n {} vs {}", dist1, bidi1, dist2, bidi2);
 }

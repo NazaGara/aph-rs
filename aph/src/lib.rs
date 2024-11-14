@@ -1,13 +1,10 @@
 pub mod formats;
 pub mod linalg;
 
-use itertools::Itertools;
-use linalg::{fields::PseudoField, Vector};
-use ndarray::{Array, Array2, Axis, Order};
+use std::fmt::Display;
 
-// TODO:
-// - [ ] Put kronecker product and sum as part of the Representation Trait
-// - [ ] On the APH struct, build the max and min operators.
+use linalg::{fields::PseudoField, Vector};
+use ndarray::{Array, Array2, Axis};
 
 pub trait Representation<F: PseudoField> {
     /// The size $N$ of the APH representation.
@@ -30,8 +27,13 @@ pub trait Representation<F: PseudoField> {
         self.size() + 1
     }
 
-    //fn kron_prod(&self, other: &Self) -> Self;
-    //fn kron_sum(&self, other: &Self) -> Self;
+    fn to_array_repr(&self) -> TriangularArray<F>;
+
+    fn to_absorbing(&self) -> Vector<F>;
+
+    fn kron_prod(&self, other: &Self) -> TriangularArray<F>;
+
+    fn kron_sum(&self, other: &Self) -> TriangularArray<F>;
 }
 
 /// An APH distribution.
@@ -39,6 +41,12 @@ pub trait Representation<F: PseudoField> {
 pub struct Aph<F: PseudoField, R: Representation<F>> {
     initial: Vector<F>,
     repr: R,
+}
+
+impl<F: PseudoField, R: Representation<F>> Display for Aph<F, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "initial: {}. representation: {}", self.initial, self.repr.to_array_repr())
+    }
 }
 
 impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
@@ -116,6 +124,8 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
     }
 
     /// Converts the APH into an ordered bidiagonal representation.
+    /// result vector each column of the $\mathbf{P}$ matrix.
+    /// The initial distribution is then obtained by self.initial.dot($\mathbf{P}$).
     pub fn to_bidiagonal(&self) -> Aph<F, Bidiagonal<F>> {
         // Step 1️⃣: Construct ordered bidiagonal generator matrix.
         let mut bidiagonal = Bidiagonal::new(self.size());
@@ -138,9 +148,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             &bidiagonal.diagonal(self.size() - 1),
             &F::zero(),
         );
-
         initial[self.size() - 1] = self.initial.scalar_product(&result);
-
         std::mem::swap(&mut vector, &mut result);
 
         for row in (0..self.size() - 1).rev() {
@@ -154,6 +162,119 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
         }
 
         Aph::new(initial, bidiagonal)
+    }
+}
+
+/// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
+/// the minimum between them is the PH: $(\overrightarrow{\alpha} \oplus \overrightarrow{\beta}, \mathbf{A} \otimes \mathbf{B})$
+///
+/// Computes $min\{[self], [other]\}$
+pub fn min_ph<F: PseudoField, R: Representation<F>>(
+    ph1: &Aph<F, R>,
+    ph2: &Aph<F, R>,
+) -> Aph<F, TriangularArray<F>> {
+    let size = ph1.size() * ph2.size();
+    let delta = ph1.initial.kron_prod(&ph2.initial);
+    let repr_d = ph1
+        .repr()
+        .to_array_repr()
+        .kron_prod(&ph2.repr.to_array_repr());
+
+    assert!(
+        repr_d.matrix.shape() == &[size, size],
+        "Shape of matrix is {:?}, but Size is {:?}",
+        repr_d.matrix.shape(),
+        size
+    );
+    Aph {
+        initial: delta,
+        repr: repr_d,
+    }
+}
+
+/// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
+/// the maximum between them is the PH: $( \[ \overrightarrow{\alpha} \otimes \overrightarrow{\beta}, \overrightarrow{\beta}_{n+1}\overrightarrow{\alpha}, \overrightarrow{\alpha}_{m+1}\overrightarrow{\beta} \], \mathbf{D})$
+/// where:
+/// $$
+/// \mathbf{D} =
+/// \begin{bmatrix}
+/// \mathbf{A} \oplus \mathbf{B} & \mathbf{I}_{m} \otimes \overrightarrow{B} & \overrightarrow{A} \otimes \mathbf{I}_n   \\
+/// \mathbf{0}                   & \mathbf{A}                                & \mathbf{0}                                \\
+/// \mathbf{0}                   & \mathbf{0}                                & \mathbf{B}
+/// \end{bmatrix}
+/// $$
+///
+/// Computes $max\{[self], [other]\}$
+pub fn max_ph<F: PseudoField, R: Representation<F>>(
+    ph1: &Aph<F, R>,
+    ph2: &Aph<F, R>,
+) -> Aph<F, TriangularArray<F>> {
+    let size = ph1.size() * ph2.size() + ph1.size() + ph2.size();
+
+    let mut delta = ph1.initial.kron_prod(&ph2.initial).elements.to_vec();
+    delta.append(&mut vec![F::zero(); ph1.initial.size() + ph2.size()]);
+
+    let kron = ph1
+        .repr()
+        .to_array_repr()
+        .kron_sum(&ph2.repr().to_array_repr());
+    let binding = Array::from(ph2.repr().to_absorbing());
+    let eye_b = kronecker_product_array(
+        &Array::eye(ph1.size()),
+        ph1.size(),
+        ph1.size(),
+        &binding.to_shape((ph2.size(), 1)).unwrap().to_owned(),
+        ph2.size(),
+        1,
+        false,
+    );
+    let binding = Array::from(ph1.repr().to_absorbing());
+    let eye_a = kronecker_product_array(
+        &binding.to_shape((ph1.size(), 1)).unwrap().to_owned(),
+        ph1.size(),
+        1,
+        &Array::eye(ph2.size()),
+        ph2.size(),
+        ph2.size(),
+        false,
+    );
+
+    let top = ndarray::concatenate(Axis(1), &[kron.matrix.view(), eye_b.view(), eye_a.view()])
+        .expect("Something went wrong when the `top` part of the matrix.");
+
+    let mid = ndarray::concatenate(
+        Axis(1),
+        &[
+            Array::zeros((ph1.size(), ph1.size() * ph2.size())).view(),
+            ph1.repr().to_array_repr().matrix.view(),
+            Array::zeros((ph1.size(), ph2.size())).view(),
+        ],
+    )
+    .expect("Something went wrong when the `mid` part of the matrix.");
+
+    let bot = ndarray::concatenate(
+        Axis(1),
+        &[
+            Array::zeros((ph2.size(), ph1.size() * ph2.size())).view(),
+            Array::zeros((ph2.size(), ph1.size())).view(),
+            ph2.repr().to_array_repr().matrix.view(),
+        ],
+    )
+    .expect("Something went wrong when the `bot` part of the matrix.");
+
+    let matrix = ndarray::concatenate(Axis(0), &[top.view(), mid.view(), bot.view()])
+    .expect("Something went wrong when assembling the arrays `top`, `mid` and `bot`. Please check that the sizes are correct.");
+
+    assert!(
+        matrix.shape() == &[size, size],
+        "Shape of matrix is {:?}, but Size is {:?}",
+        matrix.shape(),
+        size
+    );
+
+    Aph {
+        initial: delta.into(),
+        repr: TriangularArray { size, matrix },
     }
 }
 
@@ -191,12 +312,10 @@ pub struct Triangular<F> {
 impl<F: PseudoField> From<Vec<F>> for Triangular<F> {
     fn from(value: Vec<F>) -> Self {
         let size = (-1.0 + f64::floor(f64::sqrt((1 + 8 * value.len()) as f64)) / 2.0) as usize;
-        // println!("K: {:?} ==> n: {:?}", value.len(), size);
         let mut t: Triangular<F> = Triangular::new(size);
         for row in 0..size {
             for col in row + 1..size {
                 let elem = value[row * col + col].clone();
-                // println!("{:?} {:?} --> {:?}", row, col, elem);
                 t.set(row, col, elem);
             }
         }
@@ -282,7 +401,6 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
             if row == column {
                 self.diagonal(row)
             } else {
-                // self.matrix[self.idx(row, column)].clone()
                 self.matrix[row * self.size + column - (row + 1) * row / 2 - 1].clone()
             }
         } else {
@@ -292,6 +410,18 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
             );
             F::zero()
         }
+    }
+    fn kron_prod(&self, _other: &Self) -> TriangularArray<F> {
+        todo!()
+    }
+    fn kron_sum(&self, _other: &Self) -> TriangularArray<F> {
+        todo!()
+    }
+    fn to_absorbing(&self) -> Vector<F> {
+        todo!()
+    }
+    fn to_array_repr(&self) -> TriangularArray<F> {
+        todo!()
     }
 }
 
@@ -326,39 +456,31 @@ impl<F: PseudoField> Bidiagonal<F> {
         self.0.sort_by(|x, y| y.partial_cmp(x).unwrap());
         self
     }
+}
 
-    pub fn kron_product(&self, other: &Bidiagonal<F>) -> Bidiagonal<F> {
-        let m1 = self.0.clone();
-        let m2 = self.0.clone();
-        let result = diag_kronecker_op(
-            &m1,
-            self.0.len(),
-            &m2,
-            other.0.len(),
-            |lhs: &mut F, rhs: &F| {
-                lhs.mul_assign(rhs);
-                // lhs.to_owned()
-            },
-            F::one(),
-        );
-        Bidiagonal(result)
+impl<F: PseudoField> From<Bidiagonal<F>> for TriangularArray<F> {
+    fn from(value: Bidiagonal<F>) -> Self {
+        let size = value.size();
+        let mut matrix = Array::from_diag(&Array::from_vec(value.0.to_vec()));
+
+        for row in 0..size - 1 {
+            let mut val = matrix.get((row, row)).unwrap().clone();
+            val.neg_assign();
+            *matrix.get_mut((row, row + 1)).unwrap() = val;
+        }
+
+        TriangularArray { size: size, matrix }
     }
+}
 
-    pub fn kron_sum(&self, other: &Bidiagonal<F>) -> Bidiagonal<F> {
-        let m1 = self.0.clone();
-        let m2 = self.0.clone();
-        let result = diag_kronecker_op(
-            &m1,
+impl<F: PseudoField> Display for Bidiagonal<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "size: {}. repr: {}",
             self.0.len(),
-            &m2,
-            other.0.len(),
-            |lhs: &mut F, rhs: &F| {
-                lhs.add_assign(rhs);
-                // lhs.to_owned()
-            },
-            F::zero(),
-        );
-        Bidiagonal(result)
+            TriangularArray::from(self.to_owned()).matrix
+        )
     }
 }
 
@@ -381,6 +503,33 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
         } else {
             F::zero()
         }
+    }
+
+    fn to_array_repr(&self) -> TriangularArray<F> {
+        TriangularArray::from(self.clone())
+    }
+
+    fn kron_prod(&self, other: &Bidiagonal<F>) -> TriangularArray<F> {
+        self.to_array_repr().kron_prod(&other.to_array_repr())
+    }
+
+    // FIX!
+    fn kron_sum(&self, other: &Bidiagonal<F>) -> TriangularArray<F> {
+        self.to_array_repr().kron_sum(&other.to_array_repr())
+    }
+
+    fn diagonal(&self, row: usize) -> F {
+        self.0[row].clone()
+    }
+
+    fn to_absorbing(&self) -> Vector<F> {
+        let mut rate = self.0[self.0.len() - 1].clone();
+        rate.neg_assign();
+        let mut vector = Vector::zero(self.size());
+        if let Some(first) = vector.elements.get_mut(self.size()) {
+            *first = rate;
+        }
+        vector
     }
 }
 
@@ -415,6 +564,12 @@ pub fn new_triangular_array<F: PseudoField>(size: usize) -> Aph<F, TriangularArr
 pub struct TriangularArray<F> {
     pub size: usize,
     pub matrix: Array2<F>,
+}
+
+impl<F: PseudoField> Display for TriangularArray<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "size: {}. repr: {}", self.size, self.matrix)
+    }
 }
 
 impl<F: PseudoField + Sized> TriangularArray<F> {
@@ -472,81 +627,7 @@ impl<F: PseudoField + Sized> TriangularArray<F> {
     ///
     /// Panics if the access is out-of-bounds
     pub fn diagonal(&self, row: usize) -> F {
-        // assert!(row <= self.size, "Out-of-bounds access.");
-        // let mut result = F::zero();
-        // // for column in row + 1..self.size + 1 {
-        //     for column in row + 1..self.size+1 {
-        //     result.sub_assign(&self.matrix[[row, column]]);
-        // }
-        // result
         self.matrix.diag()[row].clone()
-    }
-
-    pub fn kron_product(&self, other: &TriangularArray<F>) -> TriangularArray<F> {
-        let new_size = self.size * other.size;
-        let m1 = self
-            .matrix
-            .to_shape(((self.size * self.size), Order::RowMajor))
-            .unwrap()
-            .to_vec()
-            .into_boxed_slice();
-        let m2 = self
-            .matrix
-            .to_shape(((other.size * other.size), Order::RowMajor))
-            .unwrap()
-            .to_vec()
-            .into_boxed_slice();
-        let result = kronecker_product(&m1, self.size, self.size, &m2, other.size, other.size);
-        let matrix_result = Array::from(result)
-            .to_shape(((new_size, new_size), Order::RowMajor))
-            .unwrap()
-            .to_owned();
-
-        TriangularArray {
-            size: new_size,
-            matrix: matrix_result,
-        }
-    }
-
-    pub fn kron_sum(&self, other: &TriangularArray<F>) -> TriangularArray<F> {
-        let new_size = self.size * other.size;
-        let eye_1 = vec![F::zero(); other.size()].into_boxed_slice();
-        let eye_2 = vec![F::zero(); self.size()].into_boxed_slice();
-        let m1 = self
-            .matrix
-            .to_shape(((self.size * self.size), Order::RowMajor))
-            .unwrap()
-            .to_vec()
-            .into_boxed_slice();
-        let m2 = self
-            .matrix
-            .to_shape(((other.size * other.size), Order::RowMajor))
-            .unwrap()
-            .to_vec()
-            .into_boxed_slice();
-
-        let result1 = kronecker_product(&m1, self.size, self.size, &eye_1, other.size, other.size);
-        let result2 = kronecker_product(&eye_2, self.size, self.size, &m2, other.size, other.size);
-
-        let result: Box<[F]> = result1
-            .iter()
-            .zip(result2)
-            .map(|(r1, r2)| {
-                r1.clone().add_assign(&r2);
-                r1.to_owned()
-            })
-            .collect_vec()
-            .into_boxed_slice();
-
-        let matrix_result = Array::from(result)
-            .to_shape(((new_size, new_size), Order::RowMajor))
-            .unwrap()
-            .to_owned();
-
-        TriangularArray {
-            size: new_size,
-            matrix: matrix_result,
-        }
     }
 }
 
@@ -558,10 +639,71 @@ impl<F: PseudoField> Representation<F> for TriangularArray<F> {
     fn get(&self, row: usize, column: usize) -> F {
         self.matrix[[row, column]].clone()
     }
+
+    fn to_array_repr(&self) -> Self {
+        self.clone()
+    }
+
+    fn kron_prod(&self, other: &TriangularArray<F>) -> TriangularArray<F> {
+        let result = kronecker_product_array(
+            &self.matrix,
+            self.size,
+            self.size,
+            &other.matrix,
+            other.size,
+            other.size,
+            true,
+        );
+        TriangularArray {
+            size: self.size * other.size,
+            matrix: result,
+        }
+    }
+
+    fn kron_sum(&self, other: &TriangularArray<F>) -> TriangularArray<F> {
+        let eye_1 = Array::eye(other.size());
+        let eye_2 = Array::eye(self.size);
+        let mut result1 = kronecker_product_array(
+            &self.matrix,
+            self.size,
+            self.size,
+            &eye_1,
+            other.size,
+            other.size,
+            true,
+        );
+        let result2 = kronecker_product_array(
+            &eye_2,
+            self.size,
+            self.size,
+            &other.matrix,
+            other.size,
+            other.size,
+            true,
+        );
+        result1.zip_mut_with(&result2, |l, r| l.add_assign(r));
+        TriangularArray {
+            size: self.size * other.size,
+            matrix: result1,
+        }
+    }
+
+    fn to_absorbing(&self) -> Vector<F> {
+        let mut vector = Vector::zero(self.size);
+        for row in 0..self.size() {
+            let mut row_sum = F::zero();
+            for col in row..self.size() {
+                row_sum.add_assign(&self.get(row, col));
+            }
+            row_sum.neg_assign();
+            vector[row] = row_sum;
+        }
+        vector
+    }
 }
 
 /// Computes the [Kronecker Product](https://en.wikipedia.org/wiki/Kronecker_product)
-fn kronecker_product<F: PseudoField>(
+fn _kronecker_product<F: PseudoField>(
     matrix_a: &Box<[F]>,
     rows_a: usize,
     cols_a: usize,
@@ -599,35 +741,80 @@ fn kronecker_product<F: PseudoField>(
     result
 }
 
-/// Computes the [Kronecker Sum](https://en.wikipedia.org/wiki/Kronecker_product#Relations_to_other_matrix_operations)
-pub fn diag_kronecker_op<F: PseudoField, T: Fn(&mut F, &F) -> ()>(
-    matrix_a: &Box<[F]>,
-    size_a: usize,
-    matrix_b: &Box<[F]>,
-    size_b: usize,
-    op: T,
-    neutral: F,
-) -> Box<[F]> {
-    let size_c = size_a * size_b;
-    let mut result = vec![F::zero(); size_c].into_boxed_slice();
+/// Computes the [Kronecker Product](https://en.wikipedia.org/wiki/Kronecker_product)
+pub fn kronecker_product_array<F: PseudoField>(
+    matrix_a: &Array2<F>,
+    rows_a: usize,
+    cols_a: usize,
+    matrix_b: &Array2<F>,
+    rows_b: usize,
+    cols_b: usize,
+    are_triangular: bool,
+) -> Array2<F> {
+    let rows_c = rows_a * rows_b;
+    let cols_c = cols_a * cols_b;
+    let mut result = Array2::zeros((rows_c, cols_c));
 
-    for i in 0..size_a {
-        let a_i = &matrix_a[i]; // Element in diagonal matrix A at (i, i)
-        for j in 0..size_b {
-            let b_j = &matrix_b[j];
-            let mut elem = neutral.clone(); //F::one();
-            op(&mut elem, a_i);
-            op(&mut elem, b_j);
-            // elem.mul_assign(a_i);
-            // elem.mul_assign(b_j);
-            println!("{:?}", elem);
-
-            // New index is given by:
-            // (i * size_b) + j // Scale up the row number, and move the column.
-            let idx_c = i * size_b + j;
-            result[idx_c] = elem;
+    for n in 0..rows_a {
+        for m in 0..cols_a {
+            if n > m && are_triangular {
+                continue;
+            }
+            let a_nm = matrix_a.get((n, m)).unwrap(); // Element in matrix A at (i, j)
+            for k in 0..rows_b {
+                for l in 0..cols_b {
+                    if k > l && are_triangular {
+                        continue;
+                    }
+                    // Position in matrix B at (k, l)
+                    let b_kl = matrix_b.get((k, l)).unwrap();
+                    let row_c = n * rows_b + k;
+                    let col_c = m * cols_b + l;
+                    let mut val = a_nm.clone();
+                    val.mul_assign(&b_kl);
+                    *result.get_mut((row_c, col_c)).unwrap() = val;
+                }
+            }
         }
     }
 
     result
 }
+
+// pub fn _kronecker_product_bidi(
+//     matrix_a: &Array2<f64>,
+//     rows_a: usize,
+//     matrix_b: &Array2<f64>,
+//     rows_b: usize,
+//     cols_b: usize,
+// ) -> Array2<f64> {
+//     let mut chunks: ndarray::ArrayBase<ndarray::OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> =
+//         Array2::zeros((1, rows_a * rows_b));
+//     let mut pre = (rows_b, 0);
+//     let mut post = (rows_b, cols_b);
+//     for row in 0..rows_a {
+//         let shift = Array2::zeros(pre);
+//         let shift2 = Array2::zeros(post);
+//         let d_r = matrix_a.get((row, row)).unwrap();
+//         let elems = ndarray::concatenate(
+//             Axis(1),
+//             &[
+//                 shift.view(),
+//                 matrix_b.mapv(|e| e * d_r).view(),
+//                 matrix_b.mapv(|e| e * -d_r).view(),
+//                 shift2.view(),
+//             ],
+//         )
+//         .unwrap();
+
+//         chunks = ndarray::concatenate(
+//             Axis(0),
+//             &[chunks.view(), elems.slice(s![.., ..rows_b * rows_a])],
+//         )
+//         .unwrap();
+//         pre.1 += cols_b;
+//         post.1 = usize::min(0, (post.1 as i32 - cols_b as i32) as usize);
+//     }
+
+//     chunks.slice(s![1.., ..]).to_owned()
+// }
