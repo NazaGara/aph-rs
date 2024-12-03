@@ -52,7 +52,10 @@
 //!
 //! Note that the traits are defined with heap-allocated numeric types in mind.
 
-use std::{fmt::Display, ops::{Add, AddAssign, DivAssign, Mul, MulAssign, SubAssign}};
+use std::{
+    fmt::Display,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, SubAssign},
+};
 
 // use super::{One, Zero};
 use rug::{
@@ -90,7 +93,7 @@ pub enum Round {
 /// floating-point numbers.
 pub trait SparseField:
     // Debug + Sized + Clone + Ord + Eq + Zero + One + FromRational + Into<f64>
-    Debug + Sized + Clone + Ord + Eq + FromRational + Into<f64> + num_traits::Zero + num_traits::One + Display
+    Debug + Sized + Clone + Ord + Eq + FromRational + Into<f64> + num_traits::Zero + num_traits::One + Display // + num_traits::Inv
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -99,6 +102,8 @@ pub trait SparseField:
     fn sub_assign(&mut self, rhs: &Self, round: Round);
     fn mul_assign(&mut self, rhs: &Self, round: Round);
     fn div_assign(&mut self, rhs: &Self, round: Round);
+
+    fn inv(&mut self);
 }
 
 /// A [`PseudoField`] is a numeric type supporting the usual arithmetic operators of
@@ -106,7 +111,7 @@ pub trait SparseField:
 /// rational numbers, floating-point numbers, or intervals.
 pub trait PseudoField:
     // Debug + Sized + Clone + PartialOrd + PartialEq + Zero + One + FromRational
-    Debug + Sized + Clone + PartialOrd + PartialEq + num_traits::Zero + num_traits::One + FromRational + Display
+    Debug + Sized + Clone + PartialOrd + PartialEq + num_traits::Zero + num_traits::One + FromRational + Display // + num_traits::Inv
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -115,6 +120,8 @@ pub trait PseudoField:
     fn sub_assign(&mut self, rhs: &Self);
     fn mul_assign(&mut self, rhs: &Self);
     fn div_assign(&mut self, rhs: &Self);
+
+    fn inv(&mut self);
 }
 
 impl<T: SparseField> PseudoField for T {
@@ -134,29 +141,16 @@ impl<T: SparseField> PseudoField for T {
         self.sub_assign(rhs, Round::Nearest)
     }
 
-    fn mul_assign(&mut self, rhs: &Self) {// impl One for Float64 {
-        //     fn one() -> Self {
-        //         Self(rug::Float::with_val(53, 1.0).into())
-        //     }
-        
-        //     fn is_one(&self) -> bool {
-        //         *self.0.as_float() == 1.0
-        //     }
-        // }
-        // impl Zero for Float64 {
-        //     fn zero() -> Self {
-        //         Self(rug::Float::with_val(53, 0.0).into())
-        //     }
-        
-        //     fn is_zero(&self) -> bool {
-        //         self.0.as_float().is_zero()
-        //     }
-        // }
+    fn mul_assign(&mut self, rhs: &Self) {
         self.mul_assign(rhs, Round::Nearest)
     }
 
     fn div_assign(&mut self, rhs: &Self) {
         self.div_assign(rhs, Round::Nearest)
+    }
+
+    fn inv(&mut self) {
+        self.inv();
     }
 }
 
@@ -167,7 +161,7 @@ impl<T: SparseField> PseudoField for T {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Float64(rug::float::OrdFloat);
 
-impl Display for Float64{
+impl Display for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
         val.set_prec_round_64(4, rug::float::Round::Up);
@@ -230,6 +224,14 @@ impl num_traits::One for Float64 {
     }
 }
 
+// impl num_traits::Inv for Float64{
+//     type Output = Self;
+
+//     fn inv(self) -> Self::Output {
+//         Self(rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.0))).into())
+//     }
+// }
+
 impl From<f64> for Float64 {
     fn from(value: f64) -> Self {
         Self(rug::Float::with_val_64(53, value).into())
@@ -283,6 +285,9 @@ impl SparseField for Float64 {
             .as_float_mut()
             .div_assign_round(rhs.0.as_float(), round_to_rug_round(round));
     }
+    fn inv(&mut self) {
+        *self = Self(rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.0.clone()))).into())
+    }
 }
 
 /// An arbitrary-precision rational number implementing [`Field`].
@@ -291,7 +296,7 @@ impl SparseField for Float64 {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Rational(rug::Rational);
 
-impl Display for Rational{
+impl Display for Rational {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.to_f64())
     }
@@ -329,6 +334,14 @@ impl num_traits::Zero for Rational {
     }
 }
 
+// impl num_traits::Inv for Rational{
+//     type Output = Self;
+
+//     fn inv(self) -> Self::Output {
+//         Self(rug::Rational::from_f64(1.0.div(self.0.to_f64())).unwrap())
+//     }
+// }
+
 impl Add for Rational {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
@@ -346,6 +359,27 @@ impl Mul for Rational {
 impl From<f64> for Rational {
     fn from(value: f64) -> Self {
         Self(rug::Rational::from_f64(value).unwrap())
+    }
+}
+
+impl From<z3::ast::Real<'_>> for Rational {
+    fn from(value: z3::ast::Real) -> Self {
+        let real_str = value.to_string().replace("(", "").replace(")", "").replace(".0", "");
+        if let Some((_, num_and_denom_str)) = real_str.split_once("/ ") {
+            let (num_str, denom_str) = num_and_denom_str
+                .split_once(" ")
+                .expect("Something went wrong");
+            Rational::from_rational(
+                num_str.trim(),
+                denom_str.trim(),
+            )
+        } else {
+            Rational(
+                rug::Rational::parse(real_str)
+                    .map(|incomplete| incomplete.complete())
+                    .unwrap(),
+            )
+        }
     }
 }
 
@@ -389,6 +423,9 @@ impl PseudoField for Rational {
 
     fn div_assign(&mut self, rhs: &Self) {
         self.0.div_assign(&rhs.0);
+    }
+    fn inv(&mut self) {
+        *self = Self(rug::Rational::from_f64(1.0.div(self.0.to_f64())).unwrap())
     }
 }
 

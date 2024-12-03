@@ -10,9 +10,12 @@ license = "MIT"
 [dependencies]
 itertools = "0.13.0"
 ndarray = "0.16.1"
+num-rational = "0.4.2"
 num-traits = "0.2.19"
 rug = "1.26.1"
 thiserror = "1.0.67"
+z3 = "0.12.1"
+# z3 = {version="0.12", features = ["static-link-z3"]}
 
 [package.metadata.docs.rs]
 rustdoc-args = [
