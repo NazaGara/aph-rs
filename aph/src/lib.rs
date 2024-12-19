@@ -2,14 +2,15 @@ pub mod formats;
 pub mod linalg;
 pub mod representation;
 
-use std::fmt::Display;
+use std::{fmt::Display, time::Instant};
 
 use itertools::Itertools;
 use linalg::{
-    fields::{PseudoField, Rational},
+    fields::{matrix_power_rational, PseudoField, Rational},
     Vector,
 };
-use ndarray::{s, Array, Array2, Axis};
+use log::info;
+use ndarray::{s, Array, Axis};
 
 use representation::{
     kronecker_product_array, Bidiagonal, Representation, Triangular, TriangularArray,
@@ -78,28 +79,6 @@ impl<F: PseudoField, R: Representation<F>> Display for Aph<F, R> {
     }
 }
 
-fn matrix_power(
-    matrix: &Array2<Rational>,
-    times_to: i32,
-    size: usize,
-) -> ndarray::ArrayBase<ndarray::OwnedRepr<f64>, ndarray::Dim<[usize; 2]>> {
-    if times_to == 0 {
-        Array2::from_diag(&Array::from_vec(vec![1.0; size]))
-    } else {
-        let shape = (size, size);
-        let lala = matrix
-            .into_iter()
-            .map(|e| f64::from(e.clone()))
-            .collect_vec();
-        let mat = Array2::from_shape_vec(shape, lala).unwrap();
-        let mut res = mat.to_owned();
-        for _ in 1..times_to {
-            res = res.dot(&mat)
-        }
-        res
-    }
-}
-
 impl<R: Representation<Rational>> Aph<Rational, R> {
     // The matrix multiplication is incremental, so, I should also return the multiplied matrix or do some fancy caching.
     pub fn eq3_14(&self, index: usize) -> Option<Vector<Rational>> {
@@ -108,16 +87,16 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         let cfg = z3::Config::new();
         let ctx = z3::Context::new(&cfg);
         let matrix = self.repr.to_array_repr().matrix;
-        let trim_matrix = matrix.slice(s![..index, ..index]).to_owned();
+        // let trim_matrix = matrix.slice(s![..index, ..index]).to_owned();
 
         let (to_reduce_ini, rest_ini) = self.initial().elements.split_at(index);
 
         let ini_z3 = to_reduce_ini
             .iter()
             .map(|value| {
-                let ratio = num_rational::Ratio::from_float(f64::from(value.to_owned()))
-                    .expect("Failed to convert float to fraction");
-                Real::from_real_str(&ctx, &ratio.numer().to_string(), &ratio.denom().to_string())
+                let numer = value.numer();
+                let denom = value.denom();
+                Real::from_real_str(&ctx, &numer.as_str(), &denom.as_str())
                     .expect("Something went wrong")
             })
             .collect_vec();
@@ -130,29 +109,56 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
 
         // Set up the linar equation system
         let solver = Solver::new(&ctx);
-        for j in 0..index - 1 {
-            let matrix_pow = matrix_power(&trim_matrix, j as i32, index);
+        let time_start = Instant::now();
 
-            let row_sum_lhs = matrix_pow
+        // Loop enroll the case j=0
+        let ones_lhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index - 1];
+        let ones_rhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index];
+
+        let mut lh_accum = Real::from_real(&ctx, 0, 1);
+        let mut rh_accum = Real::from_real(&ctx, 0, 1);
+
+        deltas
+            .iter()
+            .enumerate()
+            .map(|(i, d)| lh_accum += (d * &ones_lhs[i]).simplify())
+            .collect_vec();
+        lh_accum.simplify();
+
+        ini_z3
+            .iter()
+            .enumerate()
+            .map(|(i, val)| rh_accum += val * &ones_rhs[i].simplify())
+            .collect_vec();
+        rh_accum.simplify();
+
+        solver.assert(&lh_accum._eq(&rh_accum));
+
+        let trim_matrix = matrix.slice(s![..index, ..index]).to_owned();
+        // for j in 0..index - 1 {
+        for j in 1..index - 1 {
+            // Overwriting the value improves runtime.
+            let trim_matrix = matrix_power_rational(&trim_matrix, j);
+
+            let row_sum_lhs = trim_matrix
                 .slice(s![..index - 1, ..index - 1])
                 .sum_axis(Axis(1));
-            let row_sum_rhs = matrix_pow.sum_axis(Axis(1));
-
-            let row_sum_rhs_z3 = row_sum_rhs
-                .into_iter()
-                .map(|value| {
-                    let ratio = num_rational::Ratio::from_float(value)
-                        .expect("Failed to convert float to fraction");
-                    (ratio.numer().to_string(), ratio.denom().to_string())
-                })
-                .collect_vec();
+            let row_sum_rhs = trim_matrix
+                .sum_axis(Axis(1));
 
             let row_sum_lhs_z3 = row_sum_lhs
                 .into_iter()
                 .map(|value| {
-                    let ratio = num_rational::Ratio::from_float(value)
-                        .expect("Failed to convert float to fraction");
-                    (ratio.numer().to_string(), ratio.denom().to_string())
+                    Real::from_real_str(&ctx, &value.numer().as_str(), &value.denom().as_str())
+                        .expect("Something went wrong")
+                })
+                .collect_vec();
+
+            let row_sum_rhs_z3 = row_sum_rhs
+                .into_iter()
+                .map(|value| {
+                    Real::from_real_str(&ctx, &value.numer().as_str(), &value.denom().as_str())
+                        .expect("Something went wrong")
                 })
                 .collect_vec();
 
@@ -162,24 +168,14 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
             deltas
                 .iter()
                 .enumerate()
-                .map(|(i, d)| {
-                    lh_accum +=
-                        (d * Real::from_real_str(&ctx, &row_sum_lhs_z3[i].0, &row_sum_lhs_z3[i].1)
-                            .expect("Something went wrong"))
-                        .simplify()
-                })
+                .map(|(i, d)| lh_accum += (d * &row_sum_lhs_z3[i]).simplify())
                 .collect_vec();
             lh_accum.simplify();
 
             ini_z3
                 .iter()
                 .enumerate()
-                .map(|(i, val)| {
-                    rh_accum += val
-                        * Real::from_real_str(&ctx, &row_sum_rhs_z3[i].0, &row_sum_rhs_z3[i].1)
-                            .expect("Something went wrong")
-                            .simplify()
-                })
+                .map(|(i, val)| rh_accum += val * &row_sum_rhs_z3[i].simplify())
                 .collect_vec();
             rh_accum.simplify();
 
@@ -187,8 +183,12 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         }
 
         if solver.check() == SatResult::Sat {
+            let elapsed = time_start.elapsed();
+            info!(
+                "Time Elapsed 'eq3_14': {:?}. (IDX: {:?}) SAT",
+                elapsed, index
+            );
             let model = solver.get_model().unwrap();
-            // println!("{:?}", model);
 
             // Retrieve values from model
             let model = deltas
@@ -196,17 +196,11 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
                 .map(|delta| model.eval(delta, true).unwrap())
                 .collect_vec();
 
-            // make sure that values are positive and that the initial probabilities are well distributed.
+            // Make sure that values are positive and that the initial probabilities are well distributed.
             // Is easier and more precise to just call z3 than to parse everything.
             let mini_solver = Solver::new(&ctx);
             let mut old_accum = Real::from_real(&ctx, 0, 1);
             let mut new_accum = Real::from_real(&ctx, 0, 1);
-
-            // println!(
-            //     "New Initial: {:?}\nOld Initial:{:?}",
-            //     model,
-            //     &ini_z3[..index]
-            // );
 
             let _ = (0..index)
                 .into_iter()
@@ -235,6 +229,11 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
                 elements: new_ini.into_boxed_slice(),
             })
         } else {
+            let elapsed = time_start.elapsed();
+            info!(
+                "Time Elapsed 'eq3_14': {:?}. (IDX: {:?}) UNSATs",
+                elapsed, index
+            );
             None
         }
     }
@@ -242,18 +241,23 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
     /// Implementation of Algorithm 3.13 from Reza Pulungan's PhD thesis.
     pub fn reduce(&mut self) {
         let mut s_id = 2;
-        let ph = self.spa();
-        let mut n = ph.size();
+        // let ph = self.spa();
+        let mut n = self.size();
         let mut polynomial = self.polynomial();
         while s_id <= n {
-            if self.removable(&polynomial, s_id) {
+            // let time_start = Instant::now();
+            let isremovable = self.removable(&polynomial, s_id);
+            // let elapsed = time_start.elapsed();
+            // println!(
+            //     "Time Elapsed 'removable': {:?}. (IDX: {:?})",
+            //     elapsed, s_id
+            // );
+            if isremovable {
                 if let Some(new_ini) = self.eq3_14(s_id) {
                     self.initial = new_ini;
                     // compute new matrix
-                    // println!("Reducing! {} (of {})", s_id, n);
                     self.repr.remove_state(s_id);
                     polynomial = self.polynomial();
-                    // println!("{}\n{}", self.initial, self.repr().to_array_repr());
                     n -= 1;
                 } else {
                     s_id += 1;
@@ -275,29 +279,24 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
         Self { initial, repr }
     }
 
+    /// Determines if an specific state can be removed according to Formula 3.11, with the polynomial
+    /// $$R_i(s) = \beta_1 + \beta_2 L(\lambda_1) = \cdots + \beta_i L(\lambda_1) \dots L(\lambda_{i-1})$$
+    /// Polynomial $R(s)$ is divisible by $L(\lambda_i)$ if $R(-\lambda_i) = 0$.
+    /// Additionally, we also consider the note that specifies that states with the
+    /// same outgoing rate that the one from the initial state can not be reduced
     pub fn removable(&self, polynomial: &impl Fn(&F) -> F, index: usize) -> bool {
-        if index >= self.size() {
+        if index >= self.size() || self.repr().get(index, index) == self.repr().get(0, 0) {
             false
         } else {
-            // println!("R({}) = {:?}", &self.repr.get(index, index), polynomial(&self.repr.get(index, index)));
+            info!(
+                "R({})= {} ({})",
+                self.repr.get(index, index),
+                polynomial(&self.repr.get(index, index)),
+                polynomial(&self.repr.get(index, index)).is_zero()
+            );
             polynomial(&self.repr.get(index, index)).is_zero()
         }
     }
-
-    // pub fn _all_removable(&self) {
-    //     let poly_r = self.polynomial();
-    //     let lambdas: Vec<F> = (0..self.size())
-    //         .into_iter()
-    //         .map(|r| {
-    //             let mut v = self.repr.get(r, r);
-    //             v
-    //         })
-    //         .collect();
-    //     for l in lambdas.iter() {
-    //         let mut v = l.clone();
-    //         println!("R({}) = {:?}", v, poly_r(&v))
-    //     }
-    // }
 
     pub fn into_tuple(self) -> (Vector<F>, R) {
         (self.initial, self.repr)
@@ -402,42 +401,49 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
     /// result vector each column of the $\mathbf{P}$ matrix.
     /// The initial distribution is then obtained by self.initial.dot($\mathbf{P}$).
     pub fn spa(&self) -> Aph<F, Bidiagonal<F>> {
-        // TODO: If is already bidiagonal do nothing
+        if self.repr().is_bidiagonal() {
+            let mut bidiagonal = Bidiagonal::new(self.size());
+            for row in 0..self.size() {
+                bidiagonal.set(row, self.repr.get(row, row));
+            }
+            bidiagonal.into_ordered();
+            Aph::new(self.initial.clone(), bidiagonal)
+        } else {
+            // Step 1️⃣: Construct ordered bidiagonal generator matrix.
+            let mut bidiagonal = Bidiagonal::new(self.size());
+            for row in 0..self.size() {
+                // The eigenvalues are the values on the diagonal of the original
+                // generator matrix because it is triangular.
+                bidiagonal.set(row, self.repr.get(row, row));
+            }
+            bidiagonal.into_ordered();
 
-        // Step 1️⃣: Construct ordered bidiagonal generator matrix.
-        let mut bidiagonal = Bidiagonal::new(self.size());
-        for row in 0..self.size() {
-            // The eigenvalues are the values on the diagonal of the original
-            // generator matrix because it is triangular.
-            bidiagonal.set(row, self.repr.get(row, row));
+            // Step 2️⃣: Compute new initial probability vector.
+            let mut initial = Vector::zero(self.initial.size());
+
+            let mut vector = Vector::unit(self.size());
+            let mut result = Vector::zero(self.size());
+
+            self.inplace_multiply_with_vec(
+                &vector,
+                &mut result,
+                &bidiagonal.diagonal(self.size() - 1),
+                &F::zero(),
+            );
+            initial[self.size() - 1] = self.initial.scalar_product(&result);
+            std::mem::swap(&mut vector, &mut result);
+
+            for row in (0..self.size() - 1).rev() {
+                let mut divide = bidiagonal.diagonal(row);
+                divide.neg_assign();
+                let mut add = bidiagonal.diagonal(row + 1);
+                add.neg_assign();
+                self.inplace_multiply_with_vec(&vector, &mut result, &divide, &add);
+                initial[row] = self.initial.scalar_product(&result);
+                std::mem::swap(&mut result, &mut vector);
+            }
+            Aph::new(initial, bidiagonal)
         }
-        let bidiagonal = bidiagonal.into_ordered();
-
-        // Step 2️⃣: Compute new initial probability vector.
-        let mut initial = Vector::zero(self.initial.size());
-
-        let mut vector = Vector::unit(self.size());
-        let mut result = Vector::zero(self.size());
-
-        self.inplace_multiply_with_vec(
-            &vector,
-            &mut result,
-            &bidiagonal.diagonal(self.size() - 1),
-            &F::zero(),
-        );
-        initial[self.size() - 1] = self.initial.scalar_product(&result);
-        std::mem::swap(&mut vector, &mut result);
-
-        for row in (0..self.size() - 1).rev() {
-            let mut divide = bidiagonal.diagonal(row);
-            divide.neg_assign();
-            let mut add = bidiagonal.diagonal(row + 1);
-            add.neg_assign();
-            self.inplace_multiply_with_vec(&vector, &mut result, &divide, &add);
-            initial[row] = self.initial.scalar_product(&result);
-            std::mem::swap(&mut result, &mut vector);
-        }
-        Aph::new(initial, bidiagonal)
     }
 }
 
@@ -454,11 +460,11 @@ pub fn min_ph<F: PseudoField, R: Representation<F>>(
     let repr_d = ph1
         .repr()
         .to_array_repr()
-        .kron_prod(&ph2.repr.to_array_repr());
+        .kron_sum(&ph2.repr.to_array_repr());
 
     assert!(
         repr_d.matrix.shape() == &[size, size],
-        "Shape of matrix is {:?}, but Size is {:?}",
+        "Shape of matrix is {:?}, but actual size is {:?}",
         repr_d.matrix.shape(),
         size
     );

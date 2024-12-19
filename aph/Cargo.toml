@@ -8,11 +8,14 @@ repository = "https://github.com/NazaGara/aph-rs"
 license = "MIT"
 
 [dependencies]
+env_logger = "0.11.5"
 itertools = "0.13.0"
+log = "0.4.22"
 ndarray = "0.16.1"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
 rug = "1.26.1"
+# rug = {version = "1.26.1", features = ["num-traits"]}
 thiserror = "1.0.67"
 z3 = "0.12.1"
 # z3 = {version="0.12", features = ["static-link-z3"]}

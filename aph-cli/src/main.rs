@@ -9,6 +9,9 @@ use aph::{
     Aph,
 };
 
+// use log::info;
+// use memory_stats::memory_stats;
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -19,23 +22,37 @@ pub fn parse_file<F: PseudoField>(path: &Path) -> Aph<F, Triangular<F>> {
     let source = std::fs::read_to_string(path).unwrap();
     if path.extension().unwrap() == "tra" {
         formats::tra::parse(&source).unwrap()
-    }
-    else {
+    } else {
         formats::aut::parse(&source).unwrap()
     }
 }
 
-fn main() {
-    let args = Args::parse();
-    
-    let time_start = Instant::now();
-    let mut dist1: Aph<Rational, TriangularArray<Rational>> =
-        formats::tra::parse_array::<Rational>(&std::fs::read_to_string(&args.file).unwrap())
-            .unwrap();
+pub fn parse_file_array<F: PseudoField>(path: &Path) -> Aph<F, TriangularArray<F>> {
+    let source = std::fs::read_to_string(path).unwrap();
+    if path.extension().unwrap() == "tra" {
+        formats::tra::parse_array(&source).unwrap()
+    } else {
+        panic!("Only .tar format supported for representation.")
+    }
+}
 
-    println!("Before the reduction, APH is:\n{}", dist1);
-    dist1.reduce();
-    println!("After the reduction, APH is:\n{}", dist1);
-    let elapsed = time_start.elapsed();
-    println!("Time Elapsed: {:?}", elapsed);
+fn main() {
+    // std::env::set_var("RUST_LOG", "info");
+    env_logger::init();
+
+    let args = Args::parse();
+    let _time_start = Instant::now();
+    let _dist1 = parse_file_array::<Rational>(&args.file);
+
+
+    println!("Before the reduction, APH size: {}", _dist1.size());
+    let mut bidi1 = _dist1.spa();
+    bidi1.reduce();
+    let _elapsed = _time_start.elapsed();
+    println!("After the reduction, APH size: {}. Elapsed: {:?}", bidi1.size(), _elapsed);
+
+    
+
+
+    
 }

@@ -39,6 +39,10 @@ impl<F: PseudoField> Display for Vector<F> {
 }
 
 impl<F: PseudoField> Vector<F> {
+    pub fn len(&self) -> usize {
+        self.elements.iter().len()
+    }
+
     pub fn zero(size: usize) -> Self {
         Self {
             elements: vec![F::zero(); size].into(),
@@ -171,11 +175,8 @@ pub fn boxed_kronecker_op<F: PseudoField, T: Fn(&mut F, &F) -> ()>(
             let mut elem = neutral.clone();
             op(&mut elem, a_i);
             op(&mut elem, b_j);
-            // elem.mul_assign(a_i);
-            // elem.mul_assign(b_j);
 
-            // New index is given by:
-            // (i * size_b) + j // Scale up the row number, and move the column.
+            // New index is given by: (i * size_b) + j // Scale up the row number, and move the column.
             let idx_c = i * size_b + j;
             result[idx_c] = elem;
         }

@@ -54,9 +54,10 @@
 
 use std::{
     fmt::Display,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, SubAssign},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
+use ndarray::{s, Array2};
 // use super::{One, Zero};
 use rug::{
     float::OrdFloat,
@@ -122,6 +123,15 @@ pub trait PseudoField:
     fn div_assign(&mut self, rhs: &Self);
 
     fn inv(&mut self);
+
+    fn abs(&self) -> Self {
+        let mut new = self.clone();
+        if *self <= Self::zero(){
+            new.neg_assign();
+        }
+        new
+    }
+
 }
 
 impl<T: SparseField> PseudoField for T {
@@ -296,6 +306,15 @@ impl SparseField for Float64 {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Rational(rug::Rational);
 
+impl Rational {
+    pub fn numer(&self) -> String {
+        self.0.numer().to_string()
+    }
+    pub fn denom(&self) -> String {
+        self.0.denom().to_string()
+    }
+}
+
 impl Display for Rational {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.to_f64())
@@ -334,18 +353,17 @@ impl num_traits::Zero for Rational {
     }
 }
 
-// impl num_traits::Inv for Rational{
-//     type Output = Self;
-
-//     fn inv(self) -> Self::Output {
-//         Self(rug::Rational::from_f64(1.0.div(self.0.to_f64())).unwrap())
-//     }
-// }
-
 impl Add for Rational {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0.add(rhs.0))
+    }
+}
+
+impl Sub for Rational {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0.sub(rhs.0))
     }
 }
 
@@ -364,15 +382,17 @@ impl From<f64> for Rational {
 
 impl From<z3::ast::Real<'_>> for Rational {
     fn from(value: z3::ast::Real) -> Self {
-        let real_str = value.to_string().replace("(", "").replace(")", "").replace(".0", "");
+        // println!("{:?}", value);
+        let real_str = value
+            .to_string()
+            .replace("(", "")
+            .replace(")", "")
+            .replace(".0", "");
         if let Some((_, num_and_denom_str)) = real_str.split_once("/ ") {
             let (num_str, denom_str) = num_and_denom_str
                 .split_once(" ")
                 .expect("Something went wrong");
-            Rational::from_rational(
-                num_str.trim(),
-                denom_str.trim(),
-            )
+            Rational::from_rational(num_str.trim(), denom_str.trim())
         } else {
             Rational(
                 rug::Rational::parse(real_str)
@@ -424,9 +444,109 @@ impl PseudoField for Rational {
     fn div_assign(&mut self, rhs: &Self) {
         self.0.div_assign(&rhs.0);
     }
+
     fn inv(&mut self) {
-        *self = Self(rug::Rational::from_f64(1.0.div(self.0.to_f64())).unwrap())
+        // let (numer, denom) = self.0.into_numer_denom();
+        *self = Self::from_rational(&self.0.denom().to_string(), &self.0.numer().to_string());
     }
+}
+
+pub fn dot_product_custom(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
+    // Check if the dimensions are compatible
+    assert!(
+        a.shape()[1] == b.shape()[0],
+        "Incompatible dimensions for matrix multiplication."
+    );
+    // Get dimensions of the result array
+    let rows = a.shape()[0];
+    let cols = b.shape()[1];
+    // Create a new array for the result
+    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
+        Array2::zeros((rows, cols));
+    
+    // Perform manual dot product calculation
+    for i in 0..rows {
+        for j in 0..cols {
+            for k in 0..a.shape()[1] {
+                let mut val = a[(i, k)].clone();
+                val.mul_assign(&b[(k, j)]);
+                result[(i, j)].add_assign(&val);
+            }
+        }
+    }
+    result
+}
+
+pub fn matrix_power_rational(matrix: &Array2<Rational>, power: usize) -> Array2<Rational> {
+    // Check if the matrix is square
+    let n = matrix.shape()[0];
+    if matrix.shape()[1] != n {
+        panic!("Matrix must be square to compute power.");
+    }
+    // Start with an identity matrix of the same size
+    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
+        Array2::eye(n);
+
+    for _ in 0..power {
+        result = dot_product_custom(&result, &matrix);
+        // result = strassen(&result, &matrix);
+    }
+    result
+}
+
+fn _add_matrices(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
+    a + b
+}
+
+/// Subtract two matrices
+fn _subtract_matrices(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
+    a - b
+}
+
+/// Strassen's matrix multiplication algorithm
+fn _strassen(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
+    let n = a.shape()[0];
+
+    // Base case for small matrices
+    if n == 1 {
+        return Array2::from_elem((1, 1), a[[0, 0]].clone() * b[[0, 0]].clone());
+    }
+
+    // Split matrices into four submatrices
+    let mid = n / 2;
+    let a11 = a.slice(s![0..mid, 0..mid]).to_owned();
+    let a12 = a.slice(s![0..mid, mid..n]).to_owned();
+    let a21 = a.slice(s![mid..n, 0..mid]).to_owned();
+    let a22 = a.slice(s![mid..n, mid..n]).to_owned();
+
+    let b11 = b.slice(s![0..mid, 0..mid]).to_owned();
+    let b12 = b.slice(s![0..mid, mid..n]).to_owned();
+    let b21 = b.slice(s![mid..n, 0..mid]).to_owned();
+    let b22 = b.slice(s![mid..n, mid..n]).to_owned();
+
+    // Compute the seven products (Strassen's method)
+    let m1 = _strassen(&_add_matrices(&a11, &a22), &_add_matrices(&b11, &b22));
+    let m2 = _strassen(&_add_matrices(&a21, &a22), &b11);
+    let m3 = _strassen(&a11, &_subtract_matrices(&b12, &b22));
+    let m4 = _strassen(&a22, &_subtract_matrices(&b21, &b11));
+    let m5 = _strassen(&_add_matrices(&a11, &a12), &b22);
+    let m6 = _strassen(&_subtract_matrices(&a21, &a11), &_add_matrices(&b11, &b12));
+    let m7 = _strassen(&_subtract_matrices(&a12, &a22), &_add_matrices(&b21, &b22));
+
+    // Combine submatrices into the resulting matrix
+    let c11 = &m1 + &m4 - &m5 + &m7;
+    let c12 = &m3 + &m5;
+    let c21 = &m2 + &m4;
+    let c22 = &m1 - &m2 + &m3 + &m6;
+
+    // Assemble the result matrix
+    let mut result = Array2::<Rational>::zeros((n, n));
+    result.slice_mut(s![0..mid, 0..mid]).assign(&c11);
+    result.slice_mut(s![0..mid, mid..n]).assign(&c12);
+    result.slice_mut(s![mid..n, 0..mid]).assign(&c21);
+    result.slice_mut(s![mid..n, mid..n]).assign(&c22);
+
+    result
 }
 
 /// A [`PseudoField`] using interval arithmetic to track the rounding imprecision of

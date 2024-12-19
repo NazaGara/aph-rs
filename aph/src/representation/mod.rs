@@ -6,6 +6,11 @@ use ndarray::{Array, Array1, Array2, Axis};
 
 use crate::linalg;
 
+pub enum RepresentationType {
+    Bidiagonal,
+    Triangular,
+    TriangularArray,
+}
 pub trait Representation<F: PseudoField> {
     /// The size $N$ of the APH representation.
     fn size(&self) -> usize;
@@ -33,9 +38,9 @@ pub trait Representation<F: PseudoField> {
     fn kron_sum(&self, _other: &Self) -> TriangularArray<F> {
         todo!()
     }
-    fn to_absorbing(&self) -> Vector<F> {
-        todo!()
-    }
+
+    fn to_absorbing(&self) -> Vector<F>;
+
     fn to_array_repr(&self) -> TriangularArray<F> {
         todo!()
     }
@@ -47,6 +52,24 @@ pub trait Representation<F: PseudoField> {
             self.size()
         );
         todo!()
+    }
+    fn is_type(&self) -> RepresentationType;
+
+    fn is_bidiagonal(&self) -> bool {
+        match self.is_type() {
+            RepresentationType::Bidiagonal => true,
+            RepresentationType::Triangular | RepresentationType::TriangularArray => {
+                for row in 0..self.size() - 1 {
+                    let val = self.get(row, row);
+                    let mut neg_val = self.get(row, row + 1);
+                    neg_val.neg_assign();
+                    if val != neg_val {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
     }
 }
 
@@ -167,6 +190,9 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
     fn size(&self) -> usize {
         self.size
     }
+    fn is_type(&self) -> RepresentationType {
+        RepresentationType::Triangular
+    }
 
     fn get(&self, row: usize, column: usize) -> F {
         if row <= column {
@@ -182,6 +208,10 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
             );
             F::zero()
         }
+    }
+
+    fn to_absorbing(&self) -> Vector<F> {
+        todo!()
     }
 }
 
@@ -212,9 +242,8 @@ impl<F: PseudoField> Bidiagonal<F> {
         self
     }
 
-    pub fn into_ordered(mut self) -> Self {
-        self.0.sort_by(|x, y| y.partial_cmp(x).unwrap());
-        self
+    pub fn into_ordered(&mut self) {
+        self.0.sort_by(|x, y| y.partial_cmp(x).unwrap())
     }
 }
 
@@ -239,7 +268,9 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
     fn size(&self) -> usize {
         self.0.len()
     }
-
+    fn is_type(&self) -> RepresentationType {
+        RepresentationType::Bidiagonal
+    }
     fn get(&self, row: usize, column: usize) -> F {
         if row < self.0.len() {
             if row == column {
@@ -280,8 +311,7 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
             self.size()
         );
         let (pre, post) = self.0.split_at_mut(idx);
-        let (e, post) = post.split_first().expect("Something went  wrong");
-        println!("Removing: {:?}", e);
+        let (_e, post) = post.split_first().expect("Something went  wrong");
         self.0 = ([pre, post]).concat().into_boxed_slice();
     }
 
@@ -289,7 +319,7 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
         let mut rate = self.0[self.0.len() - 1].clone();
         rate.neg_assign();
         let mut vector = Vector::zero(self.size());
-        if let Some(first) = vector.elements.get_mut(self.size()) {
+        if let Some(first) = vector.elements.get_mut(self.size()-1) {
             *first = rate;
         }
         vector
@@ -332,7 +362,6 @@ impl<F: PseudoField + Sized> TriangularArray<F> {
 
     pub fn set_diagonal(&mut self) {
         for row in 0..self.size {
-            // let d_r = self.diagonal(row);
             let mut d_r = F::zero();
             for column in row + 1..self.size + 1 {
                 d_r.sub_assign(&self.matrix[[row, column]]);
@@ -384,6 +413,9 @@ impl<F: PseudoField + Sized> TriangularArray<F> {
 impl<F: PseudoField> Representation<F> for TriangularArray<F> {
     fn size(&self) -> usize {
         self.size
+    }
+    fn is_type(&self) -> RepresentationType {
+        RepresentationType::TriangularArray
     }
 
     fn get(&self, row: usize, column: usize) -> F {
