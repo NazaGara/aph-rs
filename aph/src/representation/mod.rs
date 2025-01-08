@@ -319,7 +319,7 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
         let mut rate = self.0[self.0.len() - 1].clone();
         rate.neg_assign();
         let mut vector = Vector::zero(self.size());
-        if let Some(first) = vector.elements.get_mut(self.size()-1) {
+        if let Some(first) = vector.elements.get_mut(self.size() - 1) {
             *first = rate;
         }
         vector
@@ -537,39 +537,3 @@ pub fn kronecker_product_array<F: PseudoField>(
 
     result
 }
-
-// fn _kronecker_product<F: PseudoField>(
-//     matrix_a: &Box<[F]>,
-//     rows_a: usize,
-//     cols_a: usize,
-//     matrix_b: &Box<[F]>,
-//     rows_b: usize,
-//     cols_b: usize,
-// ) -> Box<[F]> {
-//     let rows_c = rows_a * rows_b;
-//     let cols_c = cols_a * cols_b;
-//     let mut result = vec![F::zero(); rows_c * cols_c].into_boxed_slice();
-//     for n in 0..rows_a {
-//         for m in 0..cols_a {
-//             if n > m {
-//                 continue;
-//             }
-//             let a_nm = &matrix_a[n * cols_a + m]; // Element in matrix A at (i, j)
-//             for k in 0..rows_b {
-//                 for l in 0..cols_b {
-//                     if k > l {
-//                         continue;
-//                     }
-//                     // Position in matrix B at (k, l)
-//                     let b_kl = &matrix_b[k * cols_b + l];
-//                     let row_c = n * rows_b + k;
-//                     let col_c = m * cols_b + l;
-//                     result[row_c * cols_c + col_c] = F::one();
-//                     result[row_c * cols_c + col_c].mul_assign(&a_nm);
-//                     result[row_c * cols_c + col_c].mul_assign(&b_kl);
-//                 }
-//             }
-//         }
-//     }
-//     result
-// }

@@ -57,8 +57,8 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
+use fraction::Fraction;
 use ndarray::{s, Array2};
-// use super::{One, Zero};
 use rug::{
     float::OrdFloat,
     ops::{
@@ -70,6 +70,10 @@ use std::fmt::Debug;
 
 pub trait FromRational: Sized {
     fn from_rational(nominator: &str, denominator: &str) -> Self;
+}
+
+pub trait ToRational: Sized {
+    fn to_rational(&self) -> (String, String);
 }
 
 /// A [`Field`] is a numeric type satisfying all field axioms, e.g., arbitrary-precision
@@ -93,8 +97,17 @@ pub enum Round {
 /// fields but unable to exactly represent some results of some of these operators, e.g.,
 /// floating-point numbers.
 pub trait SparseField:
-    // Debug + Sized + Clone + Ord + Eq + Zero + One + FromRational + Into<f64>
-    Debug + Sized + Clone + Ord + Eq + FromRational + Into<f64> + num_traits::Zero + num_traits::One + Display // + num_traits::Inv
+    Debug
+    + Sized
+    + Clone
+    + Ord
+    + Eq
+    + Into<f64>
+    + FromRational
+    + ToRational
+    + num_traits::Zero
+    + num_traits::One
+    + Display
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -111,8 +124,16 @@ pub trait SparseField:
 /// fields but without any guarantee that the field axioms are satisfied, e.g.,
 /// rational numbers, floating-point numbers, or intervals.
 pub trait PseudoField:
-    // Debug + Sized + Clone + PartialOrd + PartialEq + Zero + One + FromRational
-    Debug + Sized + Clone + PartialOrd + PartialEq + num_traits::Zero + num_traits::One + FromRational + Display // + num_traits::Inv
+    Debug
+    + Sized
+    + Clone
+    + PartialOrd
+    + PartialEq
+    + FromRational
+    + ToRational
+    + num_traits::Zero
+    + num_traits::One
+    + Display
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -123,15 +144,6 @@ pub trait PseudoField:
     fn div_assign(&mut self, rhs: &Self);
 
     fn inv(&mut self);
-
-    fn abs(&self) -> Self {
-        let mut new = self.clone();
-        if *self <= Self::zero(){
-            new.neg_assign();
-        }
-        new
-    }
-
 }
 
 impl<T: SparseField> PseudoField for T {
@@ -174,8 +186,8 @@ pub struct Float64(rug::float::OrdFloat);
 impl Display for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
-        val.set_prec_round_64(4, rug::float::Round::Up);
-        write!(f, "{}", val)
+        val.set_prec_round_64(8, rug::float::Round::Nearest);
+        write!(f, "{:.6}", val)
     }
 }
 
@@ -184,6 +196,22 @@ impl FromRational for Float64 {
         let nominator = nominator.parse::<f64>().unwrap();
         let denominator = denominator.parse::<f64>().unwrap();
         Self(rug::Float::with_val(53, nominator / denominator).into())
+    }
+}
+
+impl ToRational for Float64 {
+    fn to_rational(&self) -> (String, String) {
+        let fraction = Fraction::from(self.0.as_float().to_f64_round(rug::float::Round::Nearest));
+        (
+            fraction
+                .numer()
+                .expect("Something went wrong when computing numerator.")
+                .to_string(),
+            fraction
+                .denom()
+                .expect("Something went wrong when computing denominator.")
+                .to_string(),
+        )
     }
 }
 
@@ -233,14 +261,6 @@ impl num_traits::One for Float64 {
         *self = Float64(rug::Float::with_val(53, 1.0).into());
     }
 }
-
-// impl num_traits::Inv for Float64{
-//     type Output = Self;
-
-//     fn inv(self) -> Self::Output {
-//         Self(rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.0))).into())
-//     }
-// }
 
 impl From<f64> for Float64 {
     fn from(value: f64) -> Self {
@@ -380,9 +400,8 @@ impl From<f64> for Rational {
     }
 }
 
-impl From<z3::ast::Real<'_>> for Rational {
-    fn from(value: z3::ast::Real) -> Self {
-        // println!("{:?}", value);
+impl From<&z3::ast::Real<'_>> for Rational {
+    fn from(value: &z3::ast::Real) -> Self {
         let real_str = value
             .to_string()
             .replace("(", "")
@@ -420,6 +439,12 @@ impl FromRational for Rational {
     }
 }
 
+impl ToRational for Rational {
+    fn to_rational(&self) -> (String, String) {
+        (self.numer(), self.denom())
+    }
+}
+
 impl PseudoField for Rational {
     fn neg_assign(&mut self) {
         self.0.neg_assign();
@@ -446,12 +471,11 @@ impl PseudoField for Rational {
     }
 
     fn inv(&mut self) {
-        // let (numer, denom) = self.0.into_numer_denom();
         *self = Self::from_rational(&self.0.denom().to_string(), &self.0.numer().to_string());
     }
 }
 
-pub fn dot_product_custom(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
+pub fn dot_product_custom<F: PseudoField>(a: &Array2<F>, b: &Array2<F>) -> Array2<F> {
     // Check if the dimensions are compatible
     assert!(
         a.shape()[1] == b.shape()[0],
@@ -461,9 +485,9 @@ pub fn dot_product_custom(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<
     let rows = a.shape()[0];
     let cols = b.shape()[1];
     // Create a new array for the result
-    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
+    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<F>, ndarray::Dim<[usize; 2]>> =
         Array2::zeros((rows, cols));
-    
+
     // Perform manual dot product calculation
     for i in 0..rows {
         for j in 0..cols {
@@ -477,14 +501,14 @@ pub fn dot_product_custom(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<
     result
 }
 
-pub fn matrix_power_rational(matrix: &Array2<Rational>, power: usize) -> Array2<Rational> {
+pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<F> {
     // Check if the matrix is square
     let n = matrix.shape()[0];
     if matrix.shape()[1] != n {
         panic!("Matrix must be square to compute power.");
     }
     // Start with an identity matrix of the same size
-    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
+    let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<F>, ndarray::Dim<[usize; 2]>> =
         Array2::eye(n);
 
     for _ in 0..power {
@@ -555,6 +579,89 @@ fn _strassen(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
 pub struct IntervalField<F: SparseField> {
     lower: F,
     upper: F,
+}
+
+impl<F: SparseField> IntervalField<F> {
+    pub fn lower(&self) -> F {
+        self.lower.clone()
+    }
+    pub fn upper(&self) -> F {
+        self.upper.clone()
+    }
+}
+
+impl<F: SparseField> Display for IntervalField<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{:.4}, {:.4}]", self.lower, self.upper)
+    }
+}
+
+impl<F: SparseField> PseudoField for IntervalField<F> {
+    fn neg_assign(&mut self) {
+        self.lower.neg_assign();
+        self.upper.neg_assign();
+    }
+
+    fn abs_assign(&mut self) {
+        self.lower.abs_assign();
+        self.upper.abs_assign();
+    }
+
+    fn add_assign(&mut self, rhs: &Self) {
+        self.lower.add_assign(&rhs.lower, Round::Down);
+        self.upper.add_assign(&rhs.upper, Round::Up);
+    }
+
+    fn sub_assign(&mut self, rhs: &Self) {
+        self.lower.sub_assign(&rhs.lower, Round::Down);
+        self.upper.sub_assign(&rhs.upper, Round::Up);
+    }
+
+    fn mul_assign(&mut self, rhs: &Self) {
+        self.lower.mul_assign(&rhs.lower, Round::Down);
+        self.upper.mul_assign(&rhs.upper, Round::Up);
+    }
+
+    fn div_assign(&mut self, rhs: &Self) {
+        self.lower.div_assign(&rhs.lower, Round::Down);
+        self.upper.div_assign(&rhs.upper, Round::Up);
+    }
+
+    fn inv(&mut self) {
+        self.lower.inv();
+        self.upper.inv();
+    }
+}
+
+impl<F: SparseField> FromRational for IntervalField<F> {
+    fn from_rational(nominator: &str, denominator: &str) -> Self {
+        let lower = F::from_rational(nominator, denominator);
+        let upper = F::from_rational(nominator, denominator);
+        IntervalField { lower, upper }
+    }
+}
+
+impl<F: SparseField> ToRational for IntervalField<F> {
+    fn to_rational(&self) -> (String, String) {
+        let two = F::one() + F::one();
+        let mut mid = self.upper.clone();
+        mid.add_assign(&self.lower, Round::Nearest);
+        mid.div_assign(&two, Round::Nearest);
+        
+        let mid: f64 = mid.into();
+        let fraction = Fraction::from(mid);
+        (
+            fraction
+                .numer()
+                .expect("Something went wrong when computing numerator.")
+                .to_string(),
+            fraction
+                .denom()
+                .expect("Something went wrong when computing denominator.")
+                .to_string(),
+        )
+
+    }
 }
 
 impl<F: SparseField> num_traits::One for IntervalField<F> {

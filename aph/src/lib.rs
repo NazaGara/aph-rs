@@ -6,11 +6,13 @@ use std::{fmt::Display, time::Instant};
 
 use itertools::Itertools;
 use linalg::{
-    fields::{matrix_power_rational, PseudoField, Rational},
+    fields::{dot_product_custom, matrix_power, FromRational, PseudoField, Rational},
     Vector,
 };
 use log::info;
-use ndarray::{s, Array, Axis};
+use ndarray::{s, Array, Array1, Axis};
+use std::fs::File;
+use std::io::{self, Write};
 
 use representation::{
     kronecker_product_array, Bidiagonal, Representation, Triangular, TriangularArray,
@@ -20,9 +22,16 @@ use z3::{
     SatResult, Solver,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct LTerm<F: PseudoField> {
     rate: F,
+}
+
+impl<F: PseudoField> Display for LTerm<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // write!(f, "((s + {}) / {})", self.rate, self.rate)
+        write!(f, "L({})", self.rate)
+    }
 }
 
 impl<F: PseudoField> LTerm<F> {
@@ -39,9 +48,18 @@ impl<F: PseudoField> LTerm<F> {
     }
 }
 
-#[derive(Debug)]
-struct Polynomial<F: PseudoField> {
+#[derive(Debug, Clone)]
+pub struct Polynomial<F: PseudoField> {
     clauses: Vec<(F, Vec<LTerm<F>>)>,
+}
+
+impl<F: PseudoField> Display for Polynomial<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (el, l_terms) in self.clauses.iter() {
+            let _ = write!(f, "{} * {} + ", el, l_terms.into_iter().join(" * "));
+        }
+        write!(f, "\n")
+    }
 }
 
 impl<F: PseudoField> Polynomial<F> {
@@ -59,6 +77,9 @@ impl<F: PseudoField> Polynomial<F> {
         }
         result
     }
+    fn _to_closure(self) -> impl Fn(&F) -> F {
+        move |s: &F| self.eval(s)
+    }
 }
 
 /// An APH distribution.
@@ -72,16 +93,93 @@ impl<F: PseudoField, R: Representation<F>> Display for Aph<F, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "initial: {}. representation: {}",
+            "initial:\n{}.\nrepresentation:\n{}",
             self.initial,
             self.repr.to_array_repr()
         )
     }
 }
 
-impl<R: Representation<Rational>> Aph<Rational, R> {
-    // The matrix multiplication is incremental, so, I should also return the multiplied matrix or do some fancy caching.
-    pub fn eq3_14(&self, index: usize) -> Option<Vector<Rational>> {
+impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
+    pub fn new(initial: impl Into<Vector<F>>, repr: R) -> Self {
+        let initial = initial.into();
+        assert!(
+            initial.size() == repr.size(),
+            "Initial probability vector has wrong size."
+        );
+        Self { initial, repr }
+    }
+
+    pub fn dump_to_tra(&self, filepath: &str) -> io::Result<()> {
+        let ph = self.spa();
+        let mut file = File::create(filepath)?;
+
+        let ini_not_zero: Vec<(usize, F)> = ph
+            .initial
+            .elements
+            .to_vec()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, e)| !e.is_zero())
+            .collect();
+        let n_states = ph.size() + 1; // Size + absorbing state
+        let n_transitions = ph.size();
+        let n_initials = ini_not_zero.len();
+
+        writeln!(file, "STATES {}", n_states)?;
+        writeln!(file, "INITIALS {}", n_initials)?;
+        writeln!(file, "TRANSITIONS {}", n_transitions)?;
+
+        // Write initial distributions
+        for (i, value) in ini_not_zero.iter() {
+            writeln!(file, "{} {}", i + 1, value)?;
+        }
+
+        // Write transitions
+        for (i, value) in ph.repr.0.to_vec().iter().enumerate() {
+            writeln!(file, "{} {} {}", i + 1, i + 2, value)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn _new_exp(nominator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
+        let mut repr = Bidiagonal::new(1);
+        repr.set(0, F::from_rational(nominator, denom));
+        Aph::new(Vector::one_and_zeros(0, 1), repr)
+    }
+
+    pub fn _new_erl(phases: usize, nominator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
+        let mut repr = Bidiagonal::new(phases);
+        (0..phases).for_each(|i| {
+            repr.set(i, F::from_rational(nominator, denom));
+        });
+        Aph::new(Vector::one_and_zeros(0, phases), repr)
+    }
+
+    /// Determines if an specific state can be removed according to Formula 3.11, with the polynomial
+    /// $$R_i(s) = \beta_1 + \beta_2 L(\lambda_1) = \cdots + \beta_i L(\lambda_1) \dots L(\lambda_{i-1})$$
+    /// Polynomial $R(s)$ is divisible by $L(\lambda_i)$ if $R(-\lambda_i) = 0$.
+    /// Additionally, we also consider the note that specifies that states with the
+    /// same outgoing rate that the one from the initial state can not be reduced
+    pub fn removable(&self, polynomial: &impl Fn(&F) -> F, index: usize) -> bool {
+        if index >= self.size() || self.repr().get(index, index) == self.repr().get(0, 0) {
+            // info!("idx: {:?}. Size: {:?}", index, self.size());
+            false
+        } else {
+            info!(
+                // "R({}) = {:?} ({})",
+                "R({}) = {} ({})",
+                self.repr.get(index, index),
+                polynomial(&self.repr.get(index, index)),
+                polynomial(&self.repr.get(index, index)).is_zero()
+            );
+            polynomial(&self.repr.get(index, index)).is_zero()
+        }
+    }
+
+    pub fn eq3_14(&self, index: usize) -> Option<Vector<F>> {
+        info!("Solving eq3_14 for index {:?} of {:?}.", index, self.size());
         assert!(2 <= index && index <= self.size(), "wrong index");
         // Initialize all for z3
         let cfg = z3::Config::new();
@@ -94,10 +192,8 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         let ini_z3 = to_reduce_ini
             .iter()
             .map(|value| {
-                let numer = value.numer();
-                let denom = value.denom();
-                Real::from_real_str(&ctx, &numer.as_str(), &denom.as_str())
-                    .expect("Something went wrong")
+                let (numer, denom) = value.to_rational();
+                Real::from_real_str(&ctx, &numer, &denom).expect("Something went wrong")
             })
             .collect_vec();
 
@@ -111,7 +207,7 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         let solver = Solver::new(&ctx);
         let time_start = Instant::now();
 
-        // Loop enroll the case j=0
+        // unroll the case j=0
         let ones_lhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index - 1];
         let ones_rhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index];
 
@@ -133,32 +229,30 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         rh_accum.simplify();
 
         solver.assert(&lh_accum._eq(&rh_accum));
-
         let trim_matrix = matrix.slice(s![..index, ..index]).to_owned();
         // for j in 0..index - 1 {
         for j in 1..index - 1 {
             // Overwriting the value improves runtime.
-            let trim_matrix = matrix_power_rational(&trim_matrix, j);
+            let trim_matrix = matrix_power(&trim_matrix, j);
 
             let row_sum_lhs = trim_matrix
                 .slice(s![..index - 1, ..index - 1])
                 .sum_axis(Axis(1));
-            let row_sum_rhs = trim_matrix
-                .sum_axis(Axis(1));
+            let row_sum_rhs = trim_matrix.sum_axis(Axis(1));
 
             let row_sum_lhs_z3 = row_sum_lhs
                 .into_iter()
                 .map(|value| {
-                    Real::from_real_str(&ctx, &value.numer().as_str(), &value.denom().as_str())
-                        .expect("Something went wrong")
+                    let (numer, denom) = value.to_rational();
+                    Real::from_real_str(&ctx, &numer, &denom).expect("Something went wrong")
                 })
                 .collect_vec();
 
             let row_sum_rhs_z3 = row_sum_rhs
                 .into_iter()
                 .map(|value| {
-                    Real::from_real_str(&ctx, &value.numer().as_str(), &value.denom().as_str())
-                        .expect("Something went wrong")
+                    let (numer, denom) = value.to_rational();
+                    Real::from_real_str(&ctx, &numer, &denom).expect("Something went wrong")
                 })
                 .collect_vec();
 
@@ -198,6 +292,8 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
 
             // Make sure that values are positive and that the initial probabilities are well distributed.
             // Is easier and more precise to just call z3 than to parse everything.
+            //TODO: Measure this and test if is faster with internal representation.
+            let time_start = Instant::now();
             let mini_solver = Solver::new(&ctx);
             let mut old_accum = Real::from_real(&ctx, 0, 1);
             let mut new_accum = Real::from_real(&ctx, 0, 1);
@@ -215,15 +311,24 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
                 .collect_vec();
 
             mini_solver.assert(&old_accum._eq(&new_accum));
-            if mini_solver.check() != SatResult::Sat {
+            let res_mini_solver = mini_solver.check();
+            let elapsed = time_start.elapsed();
+            info!(
+                "Time Elapsed 'minisolver': {:?}. ({:?})",
+                elapsed, res_mini_solver
+            );
+            if res_mini_solver != SatResult::Sat {
                 return None;
             }
-            // If check were correct, then we have to extend the new initial probabilities to match
+            // If is SAT, then we have to extend the new initial probabilities to match
+            // let mut new_ini = model.iter().map(|e| Rational::from(e)).collect_vec();
             let mut new_ini = model
                 .iter()
-                .map(|e| Rational::from(e.clone()))
+                .map(|e| {
+                    let rat = Rational::from(e);
+                    F::from_rational(&rat.numer(), &rat.denom())
+                })
                 .collect_vec();
-
             new_ini.extend(rest_ini.to_vec());
             Some(Vector {
                 elements: new_ini.into_boxed_slice(),
@@ -231,7 +336,7 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
         } else {
             let elapsed = time_start.elapsed();
             info!(
-                "Time Elapsed 'eq3_14': {:?}. (IDX: {:?}) UNSATs",
+                "Time Elapsed 'eq3_14': {:?}. (IDX: {:?}) UNSAT",
                 elapsed, index
             );
             None
@@ -242,17 +347,12 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
     pub fn reduce(&mut self) {
         let mut s_id = 2;
         // let ph = self.spa();
+        let old_size = self.size();
         let mut n = self.size();
         let mut polynomial = self.polynomial();
         while s_id <= n {
-            // let time_start = Instant::now();
-            let isremovable = self.removable(&polynomial, s_id);
-            // let elapsed = time_start.elapsed();
-            // println!(
-            //     "Time Elapsed 'removable': {:?}. (IDX: {:?})",
-            //     elapsed, s_id
-            // );
-            if isremovable {
+            // info!("Trying: {:?}", s_id);
+            if self.removable(&polynomial, s_id) {
                 if let Some(new_ini) = self.eq3_14(s_id) {
                     self.initial = new_ini;
                     // compute new matrix
@@ -266,36 +366,7 @@ impl<R: Representation<Rational>> Aph<Rational, R> {
                 s_id += 1;
             }
         }
-    }
-}
-
-impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
-    pub fn new(initial: impl Into<Vector<F>>, repr: R) -> Self {
-        let initial = initial.into();
-        assert!(
-            initial.size() == repr.size(),
-            "Initial probability vector has wrong size."
-        );
-        Self { initial, repr }
-    }
-
-    /// Determines if an specific state can be removed according to Formula 3.11, with the polynomial
-    /// $$R_i(s) = \beta_1 + \beta_2 L(\lambda_1) = \cdots + \beta_i L(\lambda_1) \dots L(\lambda_{i-1})$$
-    /// Polynomial $R(s)$ is divisible by $L(\lambda_i)$ if $R(-\lambda_i) = 0$.
-    /// Additionally, we also consider the note that specifies that states with the
-    /// same outgoing rate that the one from the initial state can not be reduced
-    pub fn removable(&self, polynomial: &impl Fn(&F) -> F, index: usize) -> bool {
-        if index >= self.size() || self.repr().get(index, index) == self.repr().get(0, 0) {
-            false
-        } else {
-            info!(
-                "R({})= {} ({})",
-                self.repr.get(index, index),
-                polynomial(&self.repr.get(index, index)),
-                polynomial(&self.repr.get(index, index)).is_zero()
-            );
-            polynomial(&self.repr.get(index, index)).is_zero()
-        }
+        info!("Reduced size from {:?} to {:?}", old_size, self.size());
     }
 
     pub fn into_tuple(self) -> (Vector<F>, R) {
@@ -328,6 +399,32 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
         self.repr.size()
     }
 
+    pub fn polynomial_v2(&self) -> Polynomial<F> {
+        let lambdas: Vec<F> = (0..self.size())
+            .into_iter()
+            .map(|r| {
+                let mut v = self.repr.get(r, r);
+                v.neg_assign();
+                v
+            })
+            .collect();
+
+        let mut clauses: Vec<(F, Vec<LTerm<F>>)> = vec![];
+        for i in 0..self.size() {
+            let b_i = self.initial[i].clone();
+            if b_i.eq(&F::zero()) {
+                continue;
+            }
+            let mut prod = vec![];
+            for j in (0..i).rev() {
+                prod.push(LTerm::new(lambdas.get(j).unwrap().to_owned()));
+            }
+            clauses.push((b_i, prod));
+        }
+        // println!("Clauses: {:?}", clauses);
+        Polynomial::new(clauses)
+    }
+
     /// Computes
     ///
     /// $$
@@ -345,7 +442,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             })
             .collect();
 
-        let mut clauses = vec![];
+        let mut clauses: Vec<(F, Vec<LTerm<F>>)> = vec![];
         for i in 0..self.size() {
             let b_i = self.initial[i].clone();
             if b_i.eq(&F::zero()) {
@@ -357,9 +454,8 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             }
             clauses.push((b_i, prod));
         }
-
+        // println!("Clauses: {:?}", clauses);
         let poly = Polynomial::new(clauses);
-        // println!("{:?}", poly);
         move |s: &F| poly.eval(s)
     }
 
@@ -401,6 +497,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
     /// result vector each column of the $\mathbf{P}$ matrix.
     /// The initial distribution is then obtained by self.initial.dot($\mathbf{P}$).
     pub fn spa(&self) -> Aph<F, Bidiagonal<F>> {
+        info!("Transforming to Bidiagonal via SPA");
         if self.repr().is_bidiagonal() {
             let mut bidiagonal = Bidiagonal::new(self.size());
             for row in 0..self.size() {
@@ -444,6 +541,72 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             }
             Aph::new(initial, bidiagonal)
         }
+    }
+}
+
+/// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
+/// the convolution of them is the PH: $(\overrightarrow{\delta}, \mathbf{D})$
+///
+/// $$
+/// \mathbf{D} =
+/// \begin{bmatrix}
+/// \mathbf{A} & \overrightarrow{A} \beta   \\
+/// \mathbf{0} & \mathbf{B}
+/// \end{bmatrix}
+/// $$
+///
+/// Computes $con\{ph1, ph2\}$
+pub fn con_ph<F: PseudoField, R: Representation<F>>(
+    ph1: &Aph<F, R>,
+    ph2: &Aph<F, R>,
+) -> Aph<F, TriangularArray<F>> {
+    let size = ph1.size() + ph2.size();
+    let mut delta = ph1.initial.elements.to_vec();
+    delta.append(&mut vec![F::zero(); ph2.size()]);
+
+    let prod_a = Array1::from(ph1.repr().to_absorbing())
+        .into_shape_clone((ph1.size(), 1))
+        .expect("msg");
+    let prod_b = Array1::from(ph2.initial().elements.to_vec())
+        .into_shape_clone((1, ph2.size()))
+        .expect("msg");
+
+    // println!("A: {:?} \nB:{:?}", prod_a, prod_b);
+
+    let prod = dot_product_custom(&prod_a, &prod_b);
+
+    // println!("DOT: {:?}", prod.view());
+
+    let top = ndarray::concatenate(
+        Axis(1),
+        &[ph1.repr.to_array_repr().matrix.view(), prod.view()],
+    )
+    .expect("Something went wrong when the `top` part of the matrix.");
+
+    // println!("TOP: {}\n{:?}", top, &[ph1.repr.to_array_repr().matrix.view(), prod.view()]);
+
+    let bot = ndarray::concatenate(
+        Axis(1),
+        &[
+            // matches number of rows of B and number of cols form A.
+            Array::zeros((ph2.size(), ph1.size())).view(),
+            ph2.repr().to_array_repr().matrix.view(),
+        ],
+    )
+    .expect("Something went wrong when the `bot` part of the matrix.");
+
+    let matrix = ndarray::concatenate(Axis(0), &[top.view(), bot.view()])
+    .expect("Something went wrong when assembling the arrays `top`, `mid` and `bot`. Please check that the sizes are correct.");
+
+    assert!(
+        matrix.shape() == &[size, size],
+        "Shape of matrix is {:?}, but actual size is {:?}",
+        matrix.shape(),
+        size
+    );
+    Aph {
+        initial: delta.into(),
+        repr: TriangularArray { size, matrix },
     }
 }
 

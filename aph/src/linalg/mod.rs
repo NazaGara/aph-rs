@@ -38,6 +38,14 @@ impl<F: PseudoField> Display for Vector<F> {
     }
 }
 
+impl<F: PseudoField> From<Vec<F>> for Vector<F> {
+    fn from(value: Vec<F>) -> Self {
+        Vector {
+            elements: value.into_boxed_slice(),
+        }
+    }
+}
+
 impl<F: PseudoField> Vector<F> {
     pub fn len(&self) -> usize {
         self.elements.iter().len()
@@ -146,13 +154,6 @@ impl<F: PseudoField> From<Vector<F>> for Array1<F> {
     }
 }
 
-impl<F: PseudoField> From<Vec<F>> for Vector<F> {
-    fn from(vector: Vec<F>) -> Self {
-        Self {
-            elements: vector.into(),
-        }
-    }
-}
 
 /// Given 1D arrays (Vectors) $\mathbf{A}$ and $\mathbf{B}$ it computes the
 /// $\mathbf{A} \otimes \mathbf{B}$ or $\mathbf{A} \oplus \mathbf{B}$
