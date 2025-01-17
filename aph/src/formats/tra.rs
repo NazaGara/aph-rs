@@ -9,13 +9,13 @@
 //! IEEE, 2005.](https://doi.org/10.1109/QEST.2005.2)
 
 use crate::{
-    linalg::fields::PseudoField, new_triangular, new_triangular_array, Aph, Triangular,
-    TriangularArray,
+    linalg::fields::PseudoField,  new_triangular_array, new_triangular, //new_triangular,
+    representation::Triangular, Aph,  TriangularArray, //Triangular,
 };
 
 use super::{Cursor, ParseError};
 
-pub fn parse<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, ParseError> {
+pub fn parse_tri<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, ParseError> {
     let mut cursor = Cursor::new(input);
     cursor.consume_tag("STATES")?;
     let states = cursor.consume_usize()?;
@@ -24,8 +24,7 @@ pub fn parse<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, Parse
     cursor.consume_tag("TRANSITIONS")?;
     let transitions = cursor.consume_usize()?;
 
-    let mut aph = new_triangular(states - 1);
-
+    let mut aph = new_triangular(states);
     for _ in 0..initials {
         let idx = cursor.consume_usize()?;
         let prob = cursor.consume_rational()?;
@@ -37,9 +36,37 @@ pub fn parse<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, Parse
         let rate = cursor.consume_rational::<F>()?;
         aph.repr_mut().set(row - 1, column - 1, rate);
     }
+    
+    aph.initial = aph.initial.remove_last();
+    aph.repr_mut().set_diagonal();
 
     Ok(aph)
 }
+
+// pub fn parse<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, ParseError> {
+//     let mut cursor = Cursor::new(input);
+//     cursor.consume_tag("STATES")?;
+//     let states = cursor.consume_usize()?;
+//     cursor.consume_tag("INITIALS")?;
+//     let initials = cursor.consume_usize()?;
+//     cursor.consume_tag("TRANSITIONS")?;
+//     let transitions = cursor.consume_usize()?;
+
+//     let mut aph = new_triangular(states - 1);
+
+//     for _ in 0..initials {
+//         let idx = cursor.consume_usize()?;
+//         let prob = cursor.consume_rational()?;
+//         aph.initial_mut()[idx - 1] = prob;
+//     }
+//     for _ in 0..transitions {
+//         let row = cursor.consume_usize()?;
+//         let column = cursor.consume_usize()?;
+//         let rate = cursor.consume_rational::<F>()?;
+//         aph.repr_mut().set(row - 1, column - 1, rate);
+//     }
+//     Ok(aph)
+// }
 
 pub fn parse_array<F: PseudoField>(input: &str) -> Result<Aph<F, TriangularArray<F>>, ParseError> {
     let mut cursor = Cursor::new(input);
@@ -51,7 +78,7 @@ pub fn parse_array<F: PseudoField>(input: &str) -> Result<Aph<F, TriangularArray
     let transitions = cursor.consume_usize()?;
 
     let mut aph = new_triangular_array(states - 1);
-
+    
     for _ in 0..initials {
         let idx = cursor.consume_usize()?;
         let prob = cursor.consume_rational()?;

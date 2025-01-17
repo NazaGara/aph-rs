@@ -118,6 +118,13 @@ impl<F: PseudoField> Vector<F> {
         );
         Vector { elements: result }
     }
+
+    pub fn remove_last(&self) -> Vector<F> {
+        let mut elems = self.elements.to_vec();
+        let _ = elems.pop();
+        Vector::from(elems)
+    }
+
 }
 
 impl<F: PseudoField> std::ops::Index<usize> for Vector<F> {
@@ -153,7 +160,6 @@ impl<F: PseudoField> From<Vector<F>> for Array1<F> {
         Array1::from_iter(value.elements)
     }
 }
-
 
 /// Given 1D arrays (Vectors) $\mathbf{A}$ and $\mathbf{B}$ it computes the
 /// $\mathbf{A} \otimes \mathbf{B}$ or $\mathbf{A} \oplus \mathbf{B}$

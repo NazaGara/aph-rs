@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::linalg::fields::PseudoField;
 
-pub mod aut;
+// pub mod aut;
 pub mod tra;
 
 #[derive(Debug, Error)]
