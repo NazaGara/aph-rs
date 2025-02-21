@@ -1,3 +1,4 @@
+pub mod coxian;
 pub mod formats;
 pub mod linalg;
 pub mod operations;
@@ -7,23 +8,21 @@ use std::{fmt::Display, time::Instant};
 
 use itertools::Itertools;
 use linalg::{
-    fields::{
-        float64::Float64, interval_field::IntervalField, matrix::Matrix, rational::Rational,
-        FromRational, PseudoField,
-    },
+    fields::{rational::Rational, PseudoField},
     Vector,
 };
-use log::info;
+
+use log::{info, warn};
 use std::fs::File;
 use std::io::{self, Write};
 
-use representation::{Bidiagonal, Representation, TriangularArray, Triangular};
+use representation::{Bidiagonal, Representation, Triangular, TriangularArray};
 use z3::{
     ast::{Ast, Real},
     SatResult, Solver,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LTerm<F: PseudoField> {
     rate: F,
 }
@@ -41,14 +40,17 @@ impl<F: PseudoField> LTerm<F> {
     pub fn eval(&self, s: &F) -> F {
         let mut numerator = s.clone();
         numerator.add_assign(&self.rate);
-        let mut denominator: F = self.rate.clone();
-        denominator.inv();
-        numerator.mul_assign(&denominator);
+        // let mut denominator: F = self.rate.clone();
+        numerator.div_assign(&self.rate);
+        
+        // denominator.inv_assign();
+        
+        // numerator.mul_assign(&denominator);
         numerator
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Polynomial<F: PseudoField> {
     clauses: Vec<(F, Vec<LTerm<F>>)>,
 }
@@ -66,6 +68,11 @@ impl<F: PseudoField> Polynomial<F> {
     fn new(clauses: Vec<(F, Vec<LTerm<F>>)>) -> Self {
         Polynomial { clauses }
     }
+
+    fn _number_of_clauses(&self) -> usize {
+        self.clauses.len()
+    }
+
     fn eval(&self, s: &F) -> F {
         let mut result = F::zero();
         for (beta, prod) in self.clauses.iter() {
@@ -77,6 +84,7 @@ impl<F: PseudoField> Polynomial<F> {
         }
         result
     }
+
     fn _to_closure(self) -> impl Fn(&F) -> F {
         move |s: &F| self.eval(s)
     }
@@ -110,13 +118,9 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
         Self { initial, repr }
     }
 
-    pub fn get_matrix(&self) -> Matrix<F> {
-        Matrix::new(self.size(), self.size(), self.repr.to_array_repr().matrix)
-    }
+    pub fn _export_to_tra(&self, filepath: &str) -> io::Result<()> {
+        let mut file = File::create(format!("{:?}_exp.tra", filepath).replace("\"", ""))?;
 
-    pub fn export_tra_with_labels(&self, filepath: &str) -> io::Result<()> {
-        let mut tra_file = File::create(format!("{:?}.tra", filepath).replace("\"", ""))?;
-        let mut lab_file = File::create(format!("{:?}.lab", filepath).replace("\"", ""))?;
         let ini_not_zero: Vec<(usize, F)> = self
             .initial
             .elements
@@ -125,27 +129,34 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             .enumerate()
             .filter(|(_, e)| !e.is_zero())
             .collect();
-        writeln!(tra_file, "ctmc")?;
+
+        let n_states = self.size() + 1; // Size + absorbing state
+        let n_transitions = self.size() + 1; //  + absorbing loop
+        let n_initials = ini_not_zero.len();
+        writeln!(file, "STATES {}", n_states)?;
+        writeln!(file, "INITIALS {}", n_initials)?;
+        writeln!(file, "TRANSITIONS {}", n_transitions)?;
+
         // Write initial distributions
         for (i, value) in ini_not_zero.iter() {
-            writeln!(tra_file, "0 {} {}", i + 1, value.to_string())?;
+            writeln!(file, "{} {}", i, value.to_string())?;
         }
         if self.repr().is_bidiagonal() {
             // Write transitions, is each state to the next, with exception of the last state.
             for i in 0..self.size() {
                 let mut v = self.repr.get(i, i);
                 v.neg_assign();
-                writeln!(tra_file, "{} {} {}", i + 1, i + 2, v.to_string())?;
+                writeln!(file, "{} {} {}", i, i + 1, v.to_string())?;
             }
             // Make last state absorbing
-            writeln!(tra_file, "{} {} 1", self.size() + 1, self.size() + 1)?;
+            writeln!(file, "{} {} 1", self.size(), self.size())?;
         } else {
             // Write non-diagonal non-zero entries in representation
             for i in 0..self.size() {
                 for j in i..self.size() {
                     let v = self.repr().get(i, j);
                     if i != j && !v.is_zero() {
-                        writeln!(tra_file, "{} {} {}", i + 1, j + 1, v.to_string())?;
+                        writeln!(file, "{} {} {}", i, j, v.to_string())?;
                     }
                 }
             }
@@ -154,110 +165,27 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
                 if !self.repr().row_sum(i).is_zero() {
                     let mut v = self.repr().row_sum(i);
                     v.neg_assign();
-                    writeln!(tra_file, "{} {} {}", i + 1, self.size() + 1, v.to_string())?;
+                    writeln!(file, "{} {} {}", i, self.size(), v.to_string())?;
                 }
             }
             // Make last state absorbing
-            writeln!(tra_file, "{} {} 1", self.size() + 1, self.size() + 1)?;
+            writeln!(file, "{} {} 1", self.size(), self.size())?;
         }
-        // Write label file for storm.
-        writeln!(lab_file, "#DECLARATION")?;
-        writeln!(lab_file, "init done")?;
-        writeln!(lab_file, "#END")?;
-        writeln!(lab_file, "0 init")?;
-        writeln!(lab_file, "{} done", self.size() + 1)?;
         Ok(())
     }
 
-    pub fn export_to_tra(&self, filepath: &str) -> io::Result<()> {
-        let ph = self.spa();
-        let mut file = File::create(filepath)?;
-
-        let ini_not_zero: Vec<(usize, F)> = ph
-            .initial
-            .elements
-            .to_vec()
-            .into_iter()
-            .enumerate()
-            .filter(|(_, e)| !e.is_zero())
-            .collect();
-        let n_states = ph.size() + 1; // Size + absorbing state
-        let n_transitions = ph.size();
-        let n_initials = ini_not_zero.len();
-
-        writeln!(file, "STATES {}", n_states)?;
-        writeln!(file, "INITIALS {}", n_initials)?;
-        writeln!(file, "TRANSITIONS {}", n_transitions)?;
-
-        // Write initial distributions
-        for (i, value) in ini_not_zero.iter() {
-            writeln!(file, "{} {}", i + 1, value)?;
-        }
-
-        // Write transitions
-        for (i, value) in ph.repr.0.to_vec().iter().enumerate() {
-            writeln!(file, "{} {} {}", i + 1, i + 2, value)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn _new_exp(nominator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
+    pub fn _new_exp(numerator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
         let mut repr = Bidiagonal::new(1);
-        repr.set(0, F::from_rational(nominator, denom));
+        repr.set(0, F::from_rational(numerator, denom));
         Aph::new(Vector::one_and_zeros(0, 1), repr)
     }
 
-    pub fn _new_erl(phases: usize, nominator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
+    pub fn _new_erl(phases: usize, numerator: &str, denom: &str) -> Aph<F, Bidiagonal<F>> {
         let mut repr = Bidiagonal::new(phases);
         (0..phases).for_each(|i| {
-            repr.set(i, F::from_rational(nominator, denom));
+            repr.set(i, F::from_rational(numerator, denom));
         });
         Aph::new(Vector::one_and_zeros(0, phases), repr)
-    }
-
-    /// Mini solver to check that the new initial distributions match the total of the old initial distributions
-    /// and to make sure that all of the new values are stochastically correct.
-    fn minisolver_z3(
-        &self,
-        index: usize,
-        ini_z3: &Vec<Real<'_>>,
-        model: &Vec<Real<'_>>,
-        ctx: &z3::Context,
-    ) -> bool {
-        // Make sure that values are positive and that the initial probabilities are well distributed.
-        // Is easier and precise to use z3.
-        let time_start = Instant::now();
-        let mini_solver = Solver::new(&ctx);
-        let mut old_accum = Real::from_real(&ctx, 0, 1);
-        let mut new_accum = Real::from_real(&ctx, 0, 1);
-        let _ = (0..index)
-            .into_iter()
-            .map(|i| old_accum += &ini_z3[i])
-            .collect_vec();
-
-        let _ = model
-            .iter()
-            .map(|delta| {
-                if delta.eq(&Real::from_real(&ctx, 0, 1)) {
-                } else {
-                    new_accum += delta;
-                    mini_solver.assert(&delta.ge(&Real::from_real(&ctx, 0, 1)))
-                };
-            })
-            .collect_vec();
-
-        mini_solver.assert(&old_accum._eq(&new_accum));
-        let res_mini_solver = mini_solver.check();
-
-        let elapsed = time_start.elapsed();
-
-        if res_mini_solver != SatResult::Sat {
-            info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
-            return false;
-        }
-        info!("Time Elapsed 'minisolver': {:?}. SAT", elapsed);
-        true
     }
 
     pub fn into_tuple(self) -> (Vector<F>, R) {
@@ -288,33 +216,6 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
 
     pub fn size(&self) -> usize {
         self.repr.size()
-    }
-
-    #[allow(dead_code)]
-    // FIXME: Remove this method.
-    fn _polynomial(&self) -> Polynomial<F> {
-        let lambdas: Vec<F> = (0..self.size())
-            .into_iter()
-            .map(|r| {
-                let mut v = self.repr.get(r, r);
-                v.neg_assign();
-                v
-            })
-            .collect();
-
-        let mut clauses: Vec<(F, Vec<LTerm<F>>)> = vec![];
-        for i in 0..self.size() {
-            let b_i = self.initial[i].clone();
-            if b_i.eq(&F::zero()) {
-                continue;
-            }
-            let mut prod = vec![];
-            for j in (0..i).rev() {
-                prod.push(LTerm::new(lambdas.get(j).unwrap().to_owned()));
-            }
-            clauses.push((b_i, prod));
-        }
-        Polynomial::new(clauses)
     }
 
     /// Computes
@@ -363,7 +264,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             bidiagonal.into_ordered();
             Aph::new(self.initial.clone(), bidiagonal)
         } else {
-            info!("Transforming to Bidiagonal via SPA. Size: {}", self.size());
+            let time_start = Instant::now();
             // Step 1️⃣: Construct ordered bidiagonal generator matrix.
             let mut bidiagonal = Bidiagonal::new(self.size());
             for row in 0..self.size() {
@@ -374,10 +275,10 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             bidiagonal.into_ordered();
 
             // Step 2️⃣: Compute new initial probability vector.
-            let mut initial = Vector::zero(self.initial.size());
+            let mut initial = Vector::zeros(self.initial.size());
 
             let mut vector = Vector::unit(self.size());
-            let mut result = Vector::zero(self.size());
+            let mut result = Vector::zeros(self.size());
 
             self.inplace_multiply_with_vec(
                 &vector,
@@ -398,6 +299,8 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
                 initial[row] = self.initial.scalar_product(&result);
                 std::mem::swap(&mut result, &mut vector);
             }
+            let elapsed = time_start.elapsed();
+            info!("Time Elapsed 'spa': {:?}. Size: {:?}", elapsed, self.size());
             Aph::new(initial, bidiagonal)
         }
     }
@@ -405,23 +308,25 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
 
 impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
     /// Implementation of Algorithm 3.13 from Reza Pulungan's PhD thesis.
-    pub fn reduce(&mut self) {
-        let mut s_id = 2;
-        // let ph = self.spa();
+    pub fn reduce(&mut self) -> usize {
+        // Starts from state at index 1, Thesis does it from 2, but uses 1-indexed states.
+        let mut s_id = 1;
         let old_size = self.size();
         let mut n = self.size();
-        let mut polynomial = self.polynomial();
-        while s_id <= n {
-            // TODO: So, if for s_i is not reduced, then, for s_{i+1} rate_i+1 == rate_i and ini_i+1 is zero, then it will aslo fail for that one
-            // The idea is that the polynomial does not change (so the value remains), but what happens for eq3_14
-            // Something like [0.2,0.2,0,0] with rates: [-1,-3,-3,-3]
-            if self.removable(&polynomial, s_id) {
-                if let Some(new_ini) = self.eq3_14(s_id) {
-                    // if let Some(new_ini) = self.eq3_14(s_id) {
+        while s_id < n {
+            let polynomial = self.polynomial(s_id);
+            let is_removable = {
+                let val = self.removable(&polynomial, s_id);
+                val.is_almost_zero()
+            };
+            
+            if is_removable {
+                // if let Some(new_ini) = self.eq3_14_z3(s_id) {
+                if let Some(new_ini) = self.eq3_14_f(s_id) {
+                    // Replace initial distribution
                     self.initial = new_ini;
-                    // compute new matrix
+                    // Compute new matrix removing state
                     self.repr.remove_state(s_id);
-                    polynomial = self.polynomial();
                     n -= 1;
                 } else {
                     s_id += 1;
@@ -431,19 +336,180 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
             }
         }
         info!("Reduced size from {:?} to {:?}", old_size, self.size());
+        old_size - self.size()
     }
 
-    pub fn eq3_14(&self, index: usize) -> Option<Vector<F>> {
+    /// Mini solver to check that the new initial distributions match the total of the old initial distributions
+    /// and to make sure that all of the new values are stochastically correct.
+    #[allow(dead_code)]
+    fn minisolver(&self, ini: &Vec<F>, model: &Vec<F>) -> bool {
+        let time_start = Instant::now();
+        let mut pre_accum = F::zero();
+        let mut post_accum = F::zero();
+        let _ = ini
+            .into_iter()
+            .map(|val| pre_accum.add_assign(&val))
+            .collect_vec();
+
+        for delta in model.iter() {
+            let mut val = delta.clone();
+            val.is_almost_zero_and_correct();
+            if delta.lt(&F::zero()) {
+                // If field is not rational, then roundoffs can produce negative values, which then may get cancelled.
+                // Don't abort but warn.
+                warn!("Negative Value: {:?}.", delta);
+                // let elapsed = time_start.elapsed();
+                // info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
+                // return false;
+            }
+            post_accum.add_assign(&val);
+        }
+        let elapsed = time_start.elapsed();
+
+
+        if !pre_accum.cmp_eq(&post_accum) {
+            info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
+            return false;
+        }
+        info!("Time Elapsed 'minisolver': {:?}. SAT", elapsed);
+        true
+    }
+
+    /// Compute Eq 3.14 from Reza's Thesis,
+    /// Note that the element to be reduced is located at the last position of the variable
+    /// ['to_reduce_ini'], located at position ['index+1'] in the representation, thus, we want to see if we can
+    /// reduce from ['index+1'] states to ['index'] states.
+    pub fn eq3_14_f(&self, index: usize) -> Option<Vector<F>> {
         info!("Solving eq3_14 for index {:?} of {:?}.", index, self.size());
-        assert!(2 <= index && index <= self.size(), "wrong index");
+        assert!(1 <= index && index <= self.size(), "wrong index");
+
+        // Take at most the index + 1 size of the matrix.
+        let ta = Triangular::from(self.repr()).slice(index + 1);
+        let (to_reduce_ini, rest_ini) = self.initial().elements.split_at(index + 1);
+
+        let mut model: Vec<F> = vec![F::zero(); index];
+
+        // Set up the linar equation system
+        let time_start = Instant::now();
+
+        let mut mut_ta: Triangular<F> = Triangular::eye(index + 1);
+
+        for _j in 1..index {
+            // I have to elevate to the power of j, which means, do a new dot product with the fixed value and overwrite the trimmed matrix.
+            mut_ta = mut_ta.dot_product(&ta);
+
+            let row_sum_lhs = mut_ta.row_sum_sliced(index);
+            let row_sum_rhs = (0..index + 1) //(0..index)
+                .into_iter()
+                .map(|i| mut_ta.row_sum(i))
+                .collect_vec();
+
+            // Now, next iteration, the delta_idx will say which one I have to solve,
+            // Which will be the (initial[delta_idx+1] * row-sum-rhs[delta_idx+1] - sum {initial * delta_values}) / rwo-sum-lhs[delta_idx]
+
+            // Accummulate rhs
+            let delta_idx = index - _j;
+            let mut new_rhs: F = F::zero();
+            to_reduce_ini
+                .iter()
+                .enumerate()
+                .map(|(i, val)| new_rhs.add_assign(&(val.clone() * row_sum_rhs[i].clone())))
+                .collect_vec();
+
+            // Substract values from the deltas that we already compute.
+            model
+                .iter()
+                .enumerate()
+                .map(|(i, e)| new_rhs.sub_assign(&(row_sum_lhs[i].clone() * e.clone())))
+                .collect_vec();
+
+            let mut val = new_rhs.clone();
+            val.div_assign(&row_sum_lhs[delta_idx]);
+            
+            model[delta_idx] = val;
+        }
+
+        // Do for the last equation with all deltas, there are no factors for the deltas.
+        let delta_idx = 0;
+        let mut val: F = F::zero();
+        to_reduce_ini
+            .iter()
+            .map(|ini| val.add_assign(&ini))
+            .collect_vec();
+
+        model.iter().map(|e| val.sub_assign(e)).collect_vec();
+        model[delta_idx] = val;
+        
+        let elapsed = time_start.elapsed();
+        
+        // The LES has solution, by Lemmas 3.8 and 3.9.
+        // Check that system will have solution, but I dont know if wee can determine this before seeing the whole LES.
+
+        info!("Time Elapsed: 'LES': {:?}. (IDX: {:?}) SAT", elapsed, index);
+
+        if !self.minisolver(&to_reduce_ini.to_vec(), &model) {
+            return None;
+        }
+
+        let mut new_ini = model.clone();
+        new_ini.extend(rest_ini.to_vec());
+        Some(Vector {
+            elements: new_ini.into_boxed_slice(),
+        })
+    }
+
+    /// Mini solver to check that the new initial distributions match the total of the old initial distributions
+    /// and to make sure that all of the new values are stochastically correct.
+    #[allow(dead_code)]
+    fn minisolver_z3(&self, ini: &Vec<F>, model: &Vec<Real<'_>>) -> bool {
+        let time_start = Instant::now();
+        let mut pre_accum = F::zero();
+        let mut post_accum = F::zero();
+        let _ = ini
+            .into_iter()
+            .map(|val| pre_accum.add_assign(&val))
+            .collect_vec();
+
+        for delta in model.iter() {
+            let rat = Rational::from(delta);
+            let mut val = F::from_rational(&rat.numer(), &rat.denom());
+            val.is_almost_zero_and_correct();
+            if val.lt(&F::zero()) {
+                // If field is not rational, then roundoffs can produce negative values, which then gets cancelled.
+                warn!("Negative Value: {:?} --> {:?}", rat, val);
+                // let elapsed = time_start.elapsed();
+                // info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
+                // return false;
+            }
+
+            post_accum.add_assign(&val);
+        }
+        let elapsed = time_start.elapsed();
+
+        if !pre_accum.cmp_eq(&post_accum) {
+            info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
+            return false;
+        }
+        info!("Time Elapsed 'minisolver': {:?}. SAT", elapsed);
+        true
+    }
+
+    /// Compute Eq 3.14 from Reza's Thesis,
+    /// Note that the element to be reduced is located at the last position of the variable
+    /// ['to_reduce_ini'], located at position ['index+1'] in the representation, thus, we want to see if we can
+    /// reduce from ['index+1'] states to ['index'] states.
+    #[allow(dead_code)]
+    pub fn eq3_14_z3(&self, index: usize) -> Option<Vector<F>> {
+        info!("Solving eq3_14 for index {:?} of {:?}.", index, self.size());
+
+        assert!(1 <= index && index <= self.size(), "wrong index");
         // Initialize all for z3
         let cfg = z3::Config::new();
         let ctx = z3::Context::new(&cfg);
 
-        let ta = Triangular::from(self.repr());
-        // let matrix = Matrix::new(self.size(), self.size(), self.repr.to_array_repr().matrix);
-
-        let (to_reduce_ini, rest_ini) = self.initial().elements.split_at(index);
+        // Take at most the index + 1 size of the matrix.
+        let ta = Triangular::from(self.repr()).slice(index + 1);
+        let (to_reduce_ini, rest_ini) = self.initial().elements.split_at(index + 1);
 
         let ini_z3 = to_reduce_ini
             .iter()
@@ -453,56 +519,37 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
             })
             .collect_vec();
 
-        // Make placeholders for the ne winitial distribution values
-        let deltas: Vec<Real<'_>> = (0..index - 1)
+        // Make placeholders for the new initial distribution
+        let deltas: Vec<Real<'_>> = (0..index)
             .into_iter()
             .map(|v| Real::new_const(&ctx, format!("d_{}", v + 1)))
             .collect();
 
-        let time_start_set_up = Instant::now();
         // Set up the linar equation system
+        let time_start_set_up = Instant::now();
         let solver = Solver::new(&ctx);
 
-        // unroll the case j=0
-        let ones_lhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index - 1];
-        let ones_rhs = vec![(Real::from_real_str(&ctx, "1", "1")).expect("msg"); index];
+        let mut mut_ta: Triangular<F> = Triangular::eye(index + 1);
 
+        // unroll the case j=0
         let mut lh_accum = Real::from_real(&ctx, 0, 1);
         let mut rh_accum = Real::from_real(&ctx, 0, 1);
 
-        deltas
-            .iter()
-            .enumerate()
-            .map(|(i, d)| lh_accum += (d * &ones_lhs[i]).simplify())
-            .collect_vec();
+        deltas.iter().map(|d| lh_accum += d).collect_vec();
         lh_accum = lh_accum.simplify();
 
-        ini_z3
-            .iter()
-            .enumerate()
-            .map(|(i, val)| rh_accum += (val * &ones_rhs[i]).simplify())
-            .collect_vec();
+        ini_z3.iter().map(|val| rh_accum += val).collect_vec();
         rh_accum = rh_accum.simplify();
 
         solver.assert(&lh_accum._eq(&rh_accum));
 
-        let trim_ta = ta.slice(index).to_owned();
-        // let trim_matrix = matrix.slice(index).to_owned();
+        for _j in 1..index {
+            // I have to elevate to the power of j, which means, do a new dot product with the fixed value and overwrite the trimmed matrix.
+            mut_ta = mut_ta.dot_product(&ta);
 
-        for j in 1..index - 1 {
-            // Overwriting the value improves runtime.
-            let trim_ta = trim_ta.matrix_power(j);
-            // let trim_matrix = trim_matrix.matrix_power(j, true);
-            let row_sum_lhs = trim_ta.row_sum_sliced(index - 1);
-            // let row_sum_lhs = trim_matrix.sum_axis_sliced(index - 1, 1);
-
-            let row_sum_rhs = (0..index)
-                .into_iter()
-                .map(|i| trim_ta.row_sum(i))
-                .collect_vec();
-            // let row_sum_rhs = trim_matrix.values.view().sum_axis(Axis(1));
-
-            let row_sum_lhs_z3 = row_sum_lhs
+            // Set up LES with syhmbolic deltas.
+            let row_sum_lhs_z3 = mut_ta
+                .row_sum_sliced(index)
                 .into_iter()
                 .map(|value| {
                     let (numer, denom) = value.to_rational();
@@ -512,7 +559,9 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
                 })
                 .collect_vec();
 
-            let row_sum_rhs_z3 = row_sum_rhs
+            let row_sum_rhs_z3 = (0..index + 1) //(0..index)
+                .into_iter()
+                .map(|i| mut_ta.row_sum(i))
                 .into_iter()
                 .map(|value| {
                     let (numer, denom) = value.to_rational();
@@ -541,8 +590,8 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
 
             solver.assert(&lh_accum._eq(&rh_accum));
         }
-        let elapsed_loop = time_start_set_up.elapsed();
 
+        let elapsed_loop = time_start_set_up.elapsed();
 
         let time_start = Instant::now();
         if solver.check() == SatResult::Sat {
@@ -559,7 +608,7 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
                 .map(|delta| model.eval(delta, true).unwrap())
                 .collect_vec();
 
-            if !self.minisolver_z3(index, &ini_z3, &model, &ctx) {
+            if !self.minisolver_z3(&to_reduce_ini.to_vec(), &model) {
                 return None;
             }
 
@@ -590,7 +639,8 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
     /// R(s) = \vv{\beta}_1 + \vv{\beta}_2 L(\lambda_1) + \dots + \vv{\beta}_i L(\lambda_1) \dots L(\lambda_{i_1})
     /// $$
     ///
-    pub fn polynomial(&self) -> impl Fn(&F) -> F {
+    #[allow(dead_code)]
+    pub fn polynomial_all(&self) -> impl Fn(&F) -> F {
         let lambdas: Vec<F> = (0..self.size())
             .into_iter()
             .map(|r| {
@@ -616,27 +666,96 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
         move |s: &F| poly.eval(s)
     }
 
+    /// Computes
+    ///
+    /// $$
+    /// R(s) = \vv{\beta}_1 + \vv{\beta}_2 L(\lambda_1) + \dots + \vv{\beta}_i L(\lambda_1) \dots L(\lambda_{i_1})
+    /// $$
+    ///
+    pub fn polynomial(&self, index: usize) -> impl Fn(&F) -> F {
+        assert!(
+            index < self.size(),
+            "Index ({}) can not be larger than the size ({}).",
+            index,
+            self.size()
+        );
+        let lambdas: Vec<F> = (0..index)
+            .into_iter()
+            .map(|r| {
+                let mut v = self.repr.get(r, r);
+                v.neg_assign();
+                v
+            })
+            .collect();
+
+        let mut clauses: Vec<(F, Vec<LTerm<F>>)> = vec![];
+        for i in 0..=index {
+            let b_i = self.initial[i].clone();
+            // if b_i.eq(&F::zero()) {
+            //     continue;
+            // }
+            let mut prod = vec![];
+            for j in (0..i).rev() {
+                prod.push(LTerm::new(lambdas.get(j).unwrap().to_owned()));
+            }
+            clauses.push((b_i, prod));
+        }
+        let poly = Polynomial::new(clauses);
+        move |s: &F| poly.eval(s)
+    }
+
     /// Determines if an specific state can be removed according to Formula 3.11, with the polynomial
-    /// $$R_i(s) = \beta_1 + \beta_2 L(\lambda_1) = \cdots + \beta_i L(\lambda_1) \dots L(\lambda_{i-1})$$
+    /// $R_i(s) = \beta_1 + \beta_2 L(\lambda_1) = \cdots + \beta_i L(\lambda_1) \dots L(\lambda_{i-1})$.
     /// Polynomial $R(s)$ is divisible by $L(\lambda_i)$ if $R(-\lambda_i) = 0$.
     /// Additionally, we also consider the note that specifies that states with the
     /// same outgoing rate that the one from the initial state can not be reduced
-    fn removable(&self, polynomial: &impl Fn(&F) -> F, index: usize) -> bool {
-        if index >= self.size() || self.repr().get(index, index) == self.repr().get(0, 0) {
-            false
+    fn removable(&self, polynomial: &impl Fn(&F) -> F, index: usize) -> F {
+        if index >= self.size()
+            || (!self.initial[0].is_zero()
+                && self.repr().get(index, index) == self.repr().get(0, 0))
+        {
+            F::one()
         } else {
             let time_start = Instant::now();
-            let is_zero = polynomial(&self.repr.get(index, index)).is_zero();
+            let value = polynomial(&self.repr.get(index, index));
             let elapsed = time_start.elapsed();
             info!(
-                "R({}) = {} ({}). Elapsed: {:?}.",
+                "({}). R({}) = {} ({}). Elapsed: {:?}.",
+                index,
                 self.repr.get(index, index),
-                polynomial(&self.repr.get(index, index)),
-                polynomial(&self.repr.get(index, index)).is_zero(),
+                value,
+                value.is_almost_zero(),
                 elapsed
             );
-            is_zero
+            value.clone()
         }
+    }
+
+    /// Translate to the equivalent Coxian representation, so it can then be correctly parsed into CTMC models for other tools
+    /// Translation according to Theorem 3.5 and
+    /// Cumani, A. (1982). On the canonical representation of homogeneous Markov processes modelling failure-time distributions. Microelectronics Reliability, 22(3), 583-602.
+    pub fn to_coxian(&self) -> coxian::Coxian<F> {
+        // lambdas stay the same, but order is inverted.
+        let lambdas = Vector::from(self.repr().0.iter().rev().map(|e| e.clone()).collect_vec());
+        // compute the factors according to the following formula
+        // x_i = 1 - beta_i \prod_{j=i+1}^{n} 1 / x_j   2 <= i <= n
+        let mut factors: Vec<F> = vec![F::one(); self.size()];
+        for i in (1..self.size()).rev() {
+            let beta_i = self.initial[i].clone();
+            if beta_i.is_almost_zero() {
+                continue;
+            } else {
+                let mut accum = F::one();
+                for j in i + 1..self.size() {
+                    let mut value = factors[j].clone();
+                    value.inv_assign();
+                    accum.mul_assign(&value);
+                }
+                factors[i].sub_assign(&(beta_i * accum));
+            }
+        }
+        let factors = Vector::from(factors.iter().rev().map(|e| e.clone()).collect_vec());
+        coxian::Coxian { lambdas, factors }
     }
 }
 
@@ -665,26 +784,4 @@ pub fn new_triangular_array<F: PseudoField>(size: usize) -> Aph<F, TriangularArr
 pub fn new_triangular<F: PseudoField>(size: usize) -> Aph<F, Triangular<F>> {
     assert!(size > 0, "Size must be greater than zero.");
     Aph::new(Vector::one_and_zeros(0, size), Triangular::new(size))
-}
-
-impl From<Aph<Rational, Bidiagonal<Rational>>>
-    for Aph<IntervalField<Float64>, Bidiagonal<IntervalField<Float64>>>
-{
-    fn from(value: Aph<Rational, Bidiagonal<Rational>>) -> Self {
-        let ini = Vector::from(
-            value
-                .initial
-                .elements
-                .iter()
-                .map(|e| IntervalField::<Float64>::from(e))
-                .collect_vec(),
-        );
-        let mut bidiagonal = Bidiagonal::new(value.size());
-        for i in 0..value.size() {
-            let val = value.repr.get(i, i);
-            let elem = IntervalField::<Float64>::from_rational(&val.numer(), &val.denom());
-            bidiagonal.set(i, elem);
-        }
-        Aph::new(ini, bidiagonal)
-    }
 }

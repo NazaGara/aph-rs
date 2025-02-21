@@ -52,25 +52,41 @@
 //!
 //! Note that the traits are defined with heap-allocated numeric types in mind.
 
-
 use ndarray::Array2;
-use std::fmt::Debug;
-use std::fmt::Display;
-// use std::ops::Add;
-// use std::ops::Sub;
+use rug::ops::AddFrom;
+use rug::ops::SubFrom;
+use rug::Integer;
+use std::hash::Hash;
+use std::{
+    fmt::{Debug, Display},
+    ops::{Add, Sub},
+};
 
-pub mod float32;
-pub mod float64;
+pub mod float64_round;
+// pub mod float32;
 pub mod interval_field;
+pub mod float64;
+pub mod float64_cf;
 pub mod rational;
-pub mod matrix; 
+pub mod inari_int;
 
 pub trait FromRational: Sized {
-    fn from_rational(nominator: &str, denominator: &str) -> Self;
+    fn from_rational(numerator: &str, denominator: &str) -> Self;
+    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self;
 }
 
 pub trait ToRational: Sized {
     fn to_rational(&self) -> (String, String);
+}
+
+pub trait FromCF: Sized {
+    fn from_cont_fraction(value: &mut ContFraction) -> Self;
+}
+
+pub trait Almost: Sized {
+    fn is_almost_zero(&self) -> bool;
+    fn cmp_eq(&self, other: &Self) -> bool;
+    fn is_almost_zero_and_correct(&mut self);
 }
 
 /// A [`Field`] is a numeric type satisfying all field axioms, e.g., arbitrary-precision
@@ -90,6 +106,70 @@ pub enum Round {
     Down,
 }
 
+fn multiple_of(number: &rug::Float, of: &rug::Float, round: Round) -> rug::Float {
+    if number.clone().remainder(of).is_zero() || number.le(of) {
+        number.clone()
+    } else {
+        match round {
+            Round::Down | Round::Zero => number.sub(number.clone().remainder(of)),
+            Round::Up => number.add(of - number.clone().remainder(of)),
+            Round::Nearest => number.clone(),
+        }
+    }
+}
+
+pub trait Rounding: Debug + Sized + Clone + Ord + Eq + Hash {
+    fn rounding() -> Round;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct Up;
+impl Rounding for Up {
+    fn rounding() -> Round {
+        Round::Up
+    }
+}
+impl Display for Up {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(UP)")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct Near;
+impl Rounding for Near {
+    fn rounding() -> Round {
+        Round::Nearest
+    }
+}
+impl Display for Near {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(Near)")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct Down;
+impl Rounding for Down {
+    fn rounding() -> Round {
+        Round::Down
+    }
+}
+impl Display for Down {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(DOWN)")
+    }
+}
+
+fn round_to_rug_round(round: Round) -> rug::float::Round {
+    match round {
+        Round::Nearest => rug::float::Round::Nearest,
+        Round::Zero => rug::float::Round::Zero,
+        Round::Up => rug::float::Round::Up,
+        Round::Down => rug::float::Round::Down,
+    }
+}
+
 /// A [`SparseField`] is a numeric type supporting the usual arithmetic operators of
 /// fields but unable to exactly represent some results of some of these operators, e.g.,
 /// floating-point numbers.
@@ -105,8 +185,9 @@ pub trait SparseField:
     + num_traits::Zero
     + num_traits::One
     + Display
-    // + Add
-    // + Sub
+    + Hash
+    + Almost
+    + FromCF
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -134,8 +215,10 @@ pub trait PseudoField:
     + num_traits::Zero
     + num_traits::One
     + Display
-    // + Add
-    // + Sub
+    + Eq
+    + Hash
+    + Almost
+    + FromCF
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -145,7 +228,7 @@ pub trait PseudoField:
     fn mul_assign(&mut self, rhs: &Self);
     fn div_assign(&mut self, rhs: &Self);
 
-    fn inv(&mut self);
+    fn inv_assign(&mut self);
     fn to_string(&self) -> String;
 }
 
@@ -174,7 +257,7 @@ impl<T: SparseField> PseudoField for T {
         self.div_assign(rhs, Round::Nearest)
     }
 
-    fn inv(&mut self) {
+    fn inv_assign(&mut self) {
         self.inv();
     }
     fn to_string(&self) -> String {
@@ -185,7 +268,7 @@ impl<T: SparseField> PseudoField for T {
 // ! Matrix operations
 // Matrixes A and B are upper triangular.
 // pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>, dst: &mut Array2<F>){
-    pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>) -> Array2<F>{
+pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>) -> Array2<F> {
     // Check if the dimensions are compatible
     assert!(
         a.shape()[1] == b.shape()[0],
@@ -194,25 +277,9 @@ impl<T: SparseField> PseudoField for T {
     // Get dimensions of the result array
     let rows = a.shape()[0];
     let cols = b.shape()[1];
-    // Create a new array for the result
+    // New array for result
     let mut dst: ndarray::ArrayBase<ndarray::OwnedRepr<F>, ndarray::Dim<[usize; 2]>> =
         Array2::zeros((rows, cols));
-    // Perform manual dot product calculation
-    // for i in 0..rows {
-    //     for j in 0..cols {
-    //         if j > i {
-    //             continue;
-    //         }
-    //         for k in 0..a.shape()[1] {
-    //             if k > i || j > k {
-    //                 continue;
-    //             }
-    //             let mut val = a[(i, k)].clone();
-    //             val.mul_assign(&b[(k, j)]);
-    //             result[(i, j)].add_assign(&val);
-    //         }
-    //     }
-    // }
     for j in 0..cols {
         for i in 0..rows {
             for k in 0..a.shape()[1] {
@@ -225,7 +292,6 @@ impl<T: SparseField> PseudoField for T {
 
     dst
 }
-
 
 pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<F> {
     // Check if the matrix is square
@@ -244,64 +310,151 @@ pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<
     result
 }
 
-// fn _add_matrices(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
-//     a + b
-// }
-// /// Subtract two matrices
-// fn _subtract_matrices(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
-//     a - b
-// }
-// /// Strassen's matrix multiplication algorithm
-// pub fn _strassen(a: &Array2<Rational>, b: &Array2<Rational>) -> Array2<Rational> {
-//     let n = a.shape()[0];
-//     // Base case for small matrices
-//     if n == 1 {
-//         return Array2::from_elem((1, 1), a[[0, 0]].clone() * b[[0, 0]].clone());
-//     }
-//     if n <= 32 {
-//         return dot_product(a, b);
-//     }
-//     // Split matrices into four submatrices
-//     let mid = n / 2;
-//     let low = Array2::<Rational>::zeros((n - mid, mid));
-//     let a11 = a.slice(s![0..mid, 0..mid]).to_owned();
-//     let a12 = a.slice(s![0..mid, mid..n]).to_owned();
+#[derive(Debug, Clone)]
+pub struct ContFraction {
+    pub values: Vec<rug::Integer>,
+}
 
-//     // let a21 = a.slice(s![mid..n, 0..mid]).to_owned();
-//     // let a21 = Array2::<Rational>::zeros((n - mid, mid)); //a.slice(s![mid..n, 0..mid]).to_owned();
+impl ContFraction {
+    pub fn new(values: Vec<Integer>) -> Self {
+        ContFraction { values }
+    }
 
-//     let a22 = a.slice(s![mid..n, mid..n]).to_owned();
+    pub fn convergent_n(&self, n: usize) -> Self {
+        let at = if n >= self.values.len() {
+            self.values.len()
+        } else {
+            n
+        };
+        let new_values = &self.values.split_at(at).0.to_owned();
+        Self::new(new_values.to_vec())
+    }
 
-//     let b11 = b.slice(s![0..mid, 0..mid]).to_owned();
-//     let b12 = b.slice(s![0..mid, mid..n]).to_owned();
+    pub fn op_to_idx(&mut self, idx: usize) {
+        let at = if idx >= self.values.len() {
+            self.values.len() - 1
+        } else {
+            idx
+        };
+        self.values[at] += Integer::ONE;
+    }
 
-//     // let b21 = b.slice(s![mid..n, 0..mid]).to_owned();
-//     // let b21 = Array2::<Rational>::zeros((n - mid, mid)); //b.slice(s![mid..n, 0..mid]).to_owned();
+    pub fn _evaluate(&mut self) -> f64 {
+        if self.values.len() == 1 {
+            return self.values.remove(0).to_i128_wrapping() as f64;
+        } else {
+            let val = self.values.remove(0).to_i128_wrapping() as f64;
+            let rest = 1.0 / ContFraction::new(self.values.clone())._evaluate();
+            val + rest
+        }
+    }
 
-//     let b22 = b.slice(s![mid..n, mid..n]).to_owned();
-//     // Compute the seven products (Strassen's method)
-//     let m1 = _strassen(&_add_matrices(&a11, &a22), &_add_matrices(&b11, &b22));
-//     // let m2 = _strassen(&_add_matrices(&a21, &a22), &b11);
-//     let m2 = _strassen(&a22, &b11);
-//     let m3 = _strassen(&a11, &_subtract_matrices(&b12, &b22));
-//     let m4 = _strassen(&a22, &_subtract_matrices(&low, &b11));
-//     let m5 = _strassen(&_add_matrices(&a11, &a12), &b22);
-//     let m6 = _strassen(&_subtract_matrices(&low, &a11), &_add_matrices(&b11, &b12));
-//     // let m7 = _strassen(&_subtract_matrices(&a12, &a22), &_add_matrices(&b21, &b22));
-//     let m7 = _strassen(&_subtract_matrices(&a12, &a22), &b22);
+    #[allow(dead_code)]
+    pub fn incrase_last(&mut self) {
+        if self.values.len() < 4 {
+        } else {
+            self.values.last_mut().unwrap().add_from(&1_i32);
+        }
+        // if len is lt 10, do nothing
+    }
 
-//     // Combine submatrices into the resulting matrix
-//     let c11: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
-//         &m1 + &m4 - &m5 + &m7;
-//     let c12: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> = &m3 + &m5;
-//     let c21: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> = &m2 + &m4;
-//     let c22: ndarray::ArrayBase<ndarray::OwnedRepr<Rational>, ndarray::Dim<[usize; 2]>> =
-//         &m1 - &m2 + &m3 + &m6;
-//     // Assemble the result matrix
-//     let mut result = Array2::<Rational>::zeros((n, n));
-//     result.slice_mut(s![0..mid, 0..mid]).assign(&c11);
-//     result.slice_mut(s![0..mid, mid..n]).assign(&c12);
-//     result.slice_mut(s![mid..n, 0..mid]).assign(&c21);
-//     result.slice_mut(s![mid..n, mid..n]).assign(&c22);
-//     result
-// }
+    #[allow(dead_code)]
+    pub fn decrase_last(&mut self) {
+        // if is one, remove last
+        // if len is lt 10, do nothing
+        if self.values.len() < 4 {
+        } else {
+            let val = self.values.last_mut().unwrap();
+            if !(*val).eq(&Integer::from(1)) {
+                val.sub_from(&1_i32)
+            };
+        }
+    }
+
+    pub fn from_z3_with_precision(value: &z3::ast::Real<'_>, precision: usize) -> Self {
+        let real_str = value
+            .to_string()
+            .replace("(", "")
+            .replace(")", "")
+            .replace(".0", "");
+        if let Some((_, num_and_denom_str)) = real_str.split_once("/ ") {
+            let (num_str, denom_str) = num_and_denom_str
+                .split_once(" ")
+                .expect("Something went wrong");
+            let num_str = num_str.trim();
+            let denom_str = denom_str.trim();
+            let mut fractions = vec![];
+            let mut numer = num_str.parse::<rug::Integer>().unwrap();
+            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
+            let (mut quot, mut rest) = numer.div_rem(denom.clone());
+            fractions.push(quot);
+            for _ in 1..precision {
+                numer = denom;
+                denom = rest;
+                (quot, rest) = numer.div_rem(denom.clone());
+                fractions.push(quot);
+                if rest.is_zero() {
+                    break;
+                }
+            }
+            ContFraction::new(fractions)
+        } else {
+            ContFraction::new(vec![real_str.parse::<rug::Integer>().unwrap()])
+        }
+    }
+
+    pub fn from_explicit_with_precision(numer: &str, denom: &str, precision: usize) -> Self {
+        if denom.eq("1") {
+            ContFraction::new(vec![numer.trim().parse::<rug::Integer>().unwrap()])
+        } else {
+            let num_str = numer.trim();
+            let denom_str = denom.trim();
+            let mut fractions = vec![];
+            let mut numer = num_str.parse::<rug::Integer>().unwrap();
+            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
+            let (mut quot, mut rest) = numer.div_rem(denom.clone());
+            fractions.push(quot);
+            for _ in 1..precision {
+                numer = denom;
+                denom = rest;
+                (quot, rest) = numer.div_rem(denom.clone());
+                fractions.push(quot);
+                if rest.is_zero() {
+                    break;
+                }
+            }
+            ContFraction::new(fractions)
+        }
+    }
+}
+
+impl From<&z3::ast::Real<'_>> for ContFraction {
+    fn from(value: &z3::ast::Real<'_>) -> Self {
+        let rat_str = value
+            .to_string()
+            .replace("(", "")
+            .replace(")", "")
+            .replace(".0", "");
+        if let Some((_, num_and_denom_str)) = rat_str.split_once("/ ") {
+            let (num_str, denom_str) = num_and_denom_str
+                .split_once(" ")
+                .expect("Something went wrong");
+            let num_str = num_str.trim();
+            let denom_str = denom_str.trim();
+            let mut fractions = vec![];
+            let mut numer = num_str.parse::<rug::Integer>().unwrap();
+            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
+            let (mut quot, mut rest) = numer.div_rem(denom.clone());
+            fractions.push(quot);
+            while rest != 0 {
+                numer = denom;
+                denom = rest;
+                (quot, rest) = numer.div_rem(denom.clone());
+                fractions.push(quot);
+            }
+            ContFraction::new(fractions)
+        } else {
+            ContFraction::new(vec![rat_str.parse::<rug::Integer>().unwrap()])
+        }
+    }
+}

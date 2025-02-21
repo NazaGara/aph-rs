@@ -1,2 +1,6 @@
 [alias]
 latex-doc = ["rustdoc", "--", "--html-in-header", "./docs/katex-header.html"]
+
+[build]
+rustflags = ["-Ctarget-cpu=native"]
+rustdocflags = ["-Ctarget-cpu=native"]

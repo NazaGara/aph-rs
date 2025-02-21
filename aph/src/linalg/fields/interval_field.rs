@@ -1,17 +1,70 @@
+use core::f64;
 use std::{
     fmt::Display,
     ops::{Add, Mul, Sub},
 };
 
-use super::{rational::Rational, FromRational, PseudoField, Round, SparseField, ToRational};
+use super::{
+    rational::Rational, Almost, ContFraction, FromCF, FromRational, PseudoField, Round,
+    SparseField, ToRational,
+};
 use num_rational::Ratio;
+use num_traits::{One, Zero};
 
 /// A [`PseudoField`] using interval arithmetic to track the rounding imprecision of
 /// a [`SparseField`].
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct IntervalField<F: SparseField> {
     lower: F,
     upper: F,
+}
+
+impl<F: SparseField> Almost for IntervalField<F> {
+    fn is_almost_zero(&self) -> bool {
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+
+        self_abs.lower.is_almost_zero() && self_abs.upper.is_almost_zero()
+    }
+
+    fn cmp_eq(&self, other: &Self) -> bool {
+        // self.eq(&other)
+        let abstol = Self::from_rational("1", "10000000");
+        let epsi = Self::from_rational("1", "10000");
+
+        if self.eq(&other) {
+            return true;
+        }
+        let mut diff = self.clone().sub(other.clone());
+        diff.abs_assign();
+        if diff.le(&abstol) {
+            return true;
+        }
+
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+        let mut other_abs = other.clone();
+        other_abs.abs_assign();
+
+        let reltol = (if self_abs.ge(&other_abs) {
+            self_abs
+        } else {
+            other_abs
+        })
+        .mul(epsi.clone());
+
+        diff.le(&reltol)
+    }
+
+    fn is_almost_zero_and_correct(&mut self) {
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+        let epsilon = Self::from_rational(&format!("{:?}", f64::EPSILON), "1");
+
+        if self_abs.le(&epsilon) {
+            self.set_zero();
+        };
+    }
 }
 
 impl<F: SparseField> IntervalField<F> {
@@ -41,44 +94,86 @@ impl<F: SparseField> PseudoField for IntervalField<F> {
     }
 
     fn add_assign(&mut self, rhs: &Self) {
-        self.lower.add_assign(&rhs.lower, Round::Down); //Round::Down);
-        self.upper.add_assign(&rhs.upper, Round::Up); //Round::Nearest);
+        self.lower.add_assign(&rhs.lower, Round::Down);
+        self.upper.add_assign(&rhs.upper, Round::Up);
     }
 
     fn sub_assign(&mut self, rhs: &Self) {
-        self.lower.sub_assign(&rhs.lower, Round::Down); //Round::Down);
-        self.upper.sub_assign(&rhs.upper, Round::Up); //Round::Nearest);
+        self.lower.sub_assign(&rhs.lower, Round::Down);
+        self.upper.sub_assign(&rhs.upper, Round::Up);
     }
 
+    // Other approach is to instead of multiplying, just categorize the Interval as M, P, N, Z.
     fn mul_assign(&mut self, rhs: &Self) {
-        self.lower.mul_assign(&rhs.lower, Round::Down); //Round::Down);
-        self.upper.mul_assign(&rhs.upper, Round::Up); //Round::Nearest);
+        let comb = vec![
+            self.lower.clone() * rhs.lower(),
+            self.lower.clone() * rhs.upper(),
+            self.upper.clone() * rhs.lower(),
+            self.upper.clone() * rhs.upper(),
+        ];
+        self.lower = comb
+            .iter()
+            .min()
+            .expect(&format!("Something went wrong computing min of {:?}", comb))
+            .clone();
+        self.upper = comb
+            .iter()
+            .max()
+            .expect(&format!("Something went wrong computing max of {:?}", comb))
+            .clone();
+        // self.lower.mul_assign(&rhs.lower, Round::Down);
+        // self.upper.mul_assign(&rhs.upper, Round::Up);
     }
 
+    // This is wrong
     fn div_assign(&mut self, rhs: &Self) {
-        self.lower.div_assign(&rhs.lower, Round::Down); //Round::Down);
-        self.upper.div_assign(&rhs.upper, Round::Up); //Round::Nearest);
+        self.lower.div_assign(&rhs.lower, Round::Down);
+        self.upper.div_assign(&rhs.upper, Round::Up);
     }
 
-    fn inv(&mut self) {
+    fn inv_assign(&mut self) {
         self.lower.inv();
         self.upper.inv();
     }
+
     fn to_string(&self) -> String {
-        // format!("[{:?}, {:?}]", self.lower.to_string(), self.upper.to_string())
-        let two = F::one() + F::one();
-        let mut mid = self.upper.clone();
-        mid.add_assign(&self.lower, Round::Nearest);
-        mid.div_assign(&two, Round::Nearest);
-        format!("{}", mid.to_string())
+        format!(
+            "[{:?}, {:?}]",
+            self.lower.to_string(),
+            self.upper.to_string(),
+        )
+        // format!("{}", self.upper.to_string())
+        // let two = F::one() + F::one();
+        // let mut mid = self.upper.clone();
+        // mid.add_assign(&self.lower, Round::Nearest);
+        // mid.div_assign(&two, Round::Nearest);
+        // format!("{}", mid.to_string())
+    }
+}
+
+impl<F: SparseField> FromCF for IntervalField<F> {
+    fn from_cont_fraction(cf: &mut ContFraction) -> Self {
+        if cf.values.len() <= 1 {
+            return IntervalField::<F>::from_rational(&format!("{:?}", cf.values[0]), "1");
+        } else {
+            let val = IntervalField::<F>::from_rational(&format!("{:?}", cf.values.remove(0)), "1");
+            let mut rgt = IntervalField::<F>::one();
+            rgt.div_assign(&IntervalField::<F>::from_cont_fraction(&mut ContFraction {
+                values: cf.values.clone(),
+            }));
+            return val + rgt;
+        }
     }
 }
 
 impl<F: SparseField> FromRational for IntervalField<F> {
-    fn from_rational(nominator: &str, denominator: &str) -> Self {
-        let lower = F::from_rational(nominator, denominator);
-        let upper = F::from_rational(nominator, denominator);
+    fn from_rational(numerator: &str, denominator: &str) -> Self {
+        let lower = F::from_rational(numerator, denominator);
+        let upper = F::from_rational(numerator, denominator);
         IntervalField { lower, upper }
+    }
+    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self {
+        Self::from_rational(numerator, denominator)
     }
 }
 
@@ -104,10 +199,7 @@ impl<F: SparseField> num_traits::One for IntervalField<F> {
     }
 
     fn is_one(&self) -> bool {
-        // self.lower.is_one() || self.upper.is_one()
-        let mut l = self.lower.clone();
-        l.add_assign(&self.upper, Round::Nearest);
-        l.is_one()
+        self.lower.is_one() || self.upper.is_one()
     }
 
     fn set_one(&mut self) {
@@ -128,10 +220,8 @@ impl<F: SparseField> num_traits::Zero for IntervalField<F> {
 
     fn is_zero(&self) -> bool {
         self.lower.is_zero() || self.upper.is_zero()
-        // let mut l = self.lower.clone();
-        // l.add_assign(&self.upper, Round::Zero);
-        // l.is_zero()
     }
+
     fn set_zero(&mut self) {
         *self = Self {
             lower: F::zero(),
@@ -152,10 +242,22 @@ impl<F: SparseField> Add for IntervalField<F> {
 
 impl<F: SparseField> Mul for IntervalField<F> {
     type Output = Self;
+    // fn mul(self, rhs: Self) -> Self::Output {
+    //     Self {
+    //         lower: self.lower * rhs.lower,
+    //         upper: self.upper * rhs.upper,
+    //     }
+    // }
     fn mul(self, rhs: Self) -> Self::Output {
+        let comb = vec![
+            self.lower.clone() * rhs.lower(),
+            self.lower.clone() * rhs.upper(),
+            self.upper.clone() * rhs.lower(),
+            self.upper.clone() * rhs.upper(),
+        ];
         Self {
-            lower: self.lower * rhs.lower,
-            upper: self.upper * rhs.upper,
+            lower: comb.iter().min().expect(&format!("Something went wrong computing min of {:?}", comb)).clone(),
+            upper: comb.iter().max().expect(&format!("Something went wrong computing max of {:?}", comb)).clone()
         }
     }
 }
@@ -184,7 +286,7 @@ impl<F: SparseField> From<&Rational> for IntervalField<F> {
     }
 }
 
-impl <F: SparseField> Sub for IntervalField<F> {
+impl<F: SparseField> Sub for IntervalField<F> {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         let mut neg_rhs = rhs.clone();

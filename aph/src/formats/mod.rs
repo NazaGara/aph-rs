@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::linalg::fields::PseudoField;
 
 // pub mod aut;
+pub mod dft;
 pub mod tra;
 
 #[derive(Debug, Error)]
@@ -64,13 +65,13 @@ impl<'i> Cursor<'i> {
     }
 
     pub fn consume_rational<F: PseudoField>(&mut self) -> Result<F, ParseError> {
-        let nominator = self.consume_number()?;
+        let numerator = self.consume_number()?;
         let denominator = if self.consume_tag("/").is_ok() {
             self.consume_number()?
         } else {
             "1"
         };
         //.map_err(|_| ParseError("Unable to construct rational.".to_owned()))
-        Ok(F::from_rational(nominator, denominator))
+        Ok(F::from_rational(numerator, denominator))
     }
 }

@@ -9,8 +9,8 @@
 //! IEEE, 2005.](https://doi.org/10.1109/QEST.2005.2)
 
 use crate::{
-    linalg::fields::PseudoField,  new_triangular_array, new_triangular, //new_triangular,
-    representation::Triangular, Aph,  TriangularArray, //Triangular,
+    linalg::fields::PseudoField,  new_triangular_array, new_triangular, 
+    representation::Triangular, Aph,  TriangularArray, 
 };
 
 use super::{Cursor, ParseError};

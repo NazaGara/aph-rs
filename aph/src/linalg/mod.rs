@@ -4,6 +4,8 @@ use std::fmt::Display;
 
 use ndarray::{Array, Array1};
 
+// use crate::representation::Triangular;
+
 use self::fields::PseudoField;
 
 pub mod fields;
@@ -51,7 +53,7 @@ impl<F: PseudoField> Vector<F> {
         self.elements.iter().len()
     }
 
-    pub fn zero(size: usize) -> Self {
+    pub fn zeros(size: usize) -> Self {
         Self {
             elements: vec![F::zero(); size].into(),
         }
@@ -64,7 +66,7 @@ impl<F: PseudoField> Vector<F> {
     }
 
     pub fn one_and_zeros(idx: usize, size: usize) -> Self {
-        let mut vector = Vector::zero(size);
+        let mut vector = Vector::zeros(size);
         if let Some(first) = vector.elements.get_mut(idx) {
             *first = F::one(); // set the first element to 1
         }
@@ -160,6 +162,21 @@ impl<F: PseudoField> From<Vector<F>> for Array1<F> {
         Array1::from_iter(value.elements)
     }
 }
+
+// pub fn lu_solve<F: PseudoField> (upper: Triangular<F>, b: Vector<F>) -> Vector<F>{
+//     let n = upper.size;
+//     let mut x = Vector::zeros(n);
+//     for i in (0..n).rev() {
+//         // let sum = (i+1..n).map(|j| upper.get(i, j) * x[j]).sum::<F>();
+//         let mut sum = F::zero();
+//         for j in (i+1)..n {
+//             sum.add_assign(&(upper.get(i, j) * x[j].clone()));
+//         }
+//         let idk = b[i];
+//         // x[i] = (b[i] - sum) / upper.get(i, j);
+//     }   
+//     x
+// }
 
 /// Given 1D arrays (Vectors) $\mathbf{A}$ and $\mathbf{B}$ it computes the
 /// $\mathbf{A} \otimes \mathbf{B}$ or $\mathbf{A} \oplus \mathbf{B}$

@@ -78,164 +78,6 @@ pub trait Representation<F: PseudoField> {
     }
 }
 
-// /// Triangular matrix representation.
-// ///
-// /// As the Markov chain underlying an APH distribution has no cycles, its infinitesimal
-// /// generator matrix has the form
-// ///
-// /// $$
-// /// \begin{pmatrix}
-// /// d(1) & \lambda_{1,2} & \cdots & \lambda_{1,N} & \lambda_{1,N+1} \\\\
-// /// 0 & d(2) & \cdots  & \lambda_{2,N} & \lambda_{2,N+1} \\\\
-// /// \vdots & \vdots & \ddots & \vdots & \vdots \\\\
-// /// 0 & 0 & \cdots & d(N) & \lambda_{N,N+1} \\\\
-// /// 0 & 0 & \cdots & 0 & 0
-// /// \end{pmatrix}
-// /// $$
-// ///
-// /// where the diagonal is given by:
-// ///
-// /// $$
-// /// d(i) := -\sum_{k=i + 1}^{N} \lambda_{i,k}
-// /// $$
-// ///
-// /// To store the matrix, it thus suffices to store the values for all $\lambda_{i,j}$
-// /// with $1 \leq i < j \leq N + 1$.
-// ///
-// /// ⚠️ Rows and columns are 0-indexed in the implementation.
-// #[derive(Clone, Debug)]
-// pub struct Triangular<F> {
-//     pub size: usize,
-//     pub matrix: Box<[F]>,
-// }
-
-// impl<F: PseudoField> Triangular<F> {
-//     /// Creates a new triangular representation of the given *size*.
-//     pub fn new(size: usize) -> Self {
-//         let matrix = vec![F::zero(); (size * (size + 1)) / 2].into();
-//         Self { size, matrix }
-//     }
-
-//     /// Computes the index into the matrix array for the given *row* and *column*.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if *column* is not greater than *row*.
-//     fn idx(&self, row: usize, column: usize) -> usize {
-//         assert!(
-//             column > row,
-//             "The *column* must be greater than the *row*. (Row: {}, Column: {})",
-//             row,
-//             column
-//         );
-//         row * self.size + column - (row + 1) * row / 2 - 1
-//     }
-
-//     /// Sets the value at the given row and column.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if *column* is not greater than *row* or if the access is out-of-bounds.
-//     pub fn set(&mut self, row: usize, column: usize, value: impl Into<F>) -> &mut Self {
-//         self.matrix[self.idx(row, column)] = value.into();
-//         self
-//     }
-
-//     /// Returns the value at the given row and column.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if the access is out-of-bounds.
-//     pub fn get(&self, row: usize, column: usize) -> F {
-//         if row <= column {
-//             if row == column {
-//                 self.diagonal(row)
-//             } else {
-//                 self.matrix[self.idx(row, column)].clone()
-//             }
-//         } else {
-//             assert!(
-//                 row <= self.size && column <= self.size,
-//                 "Out-of-bounds access."
-//             );
-//             F::zero()
-//         }
-//     }
-
-//     /// Computes the value of the diagonal of the given *row*.
-//     ///
-//     /// # Panics
-//     ///
-//     /// Panics if the access is out-of-bounds
-//     pub fn diagonal(&self, row: usize) -> F {
-//         assert!(row <= self.size, "Out-of-bounds access.");
-//         let mut result = F::zero();
-//         for column in row + 1..self.size + 1 {
-//             result.sub_assign(&self.matrix[self.idx(row, column)]);
-//         }
-//         result
-//     }
-// }
-
-// impl<F: PseudoField> Representation<F> for Triangular<F> {
-//     fn size(&self) -> usize {
-//         self.size
-//     }
-
-//     fn is_type(&self) -> RepresentationType {
-//         RepresentationType::Triangular
-//     }
-
-//     fn row_sum(&self, idx: usize) -> F {
-//         let mut sum = F::zero();
-//         for i in idx..self.size() {
-//             sum.add_assign(&self.get(idx, i));
-//         }
-//         sum
-//     }
-//     fn kron_prod(&self, _other: &Self) -> Self {
-//         todo!()
-//     }
-//     fn kron_sum(&self, _other: &Self) -> Self {
-//         todo!()
-//     }
-//     fn get(&self, row: usize, column: usize) -> F {
-//         if row <= column {
-//             if row == column {
-//                 self.diagonal(row)
-//             } else {
-//                 self.matrix[row * self.size + column - (row + 1) * row / 2 - 1].clone()
-//             }
-//         } else {
-//             assert!(
-//                 row <= self.size && column <= self.size,
-//                 "Out-of-bounds access."
-//             );
-//             F::zero()
-//         }
-//     }
-
-//     fn to_array_repr(&self) -> TriangularArray<F> {
-//         let mut ta = TriangularArray::new(self.size());
-//         for i in 0..self.size() {
-//             for j in i..self.size() {
-//                 ta.set(i, j, self.get(i, j));
-//             }
-//         }
-//         ta
-//     }
-
-//     fn to_absorbing(&self) -> Vector<F> {
-//         let mut vector = Vector::zero(self.size);
-//         for row in 0..self.size() {
-//             let mut row_sum = self.row_sum(row);
-//             row_sum.neg_assign();
-//             vector[row] = row_sum;
-//         }
-//         vector
-//     }
-// }
-
 /// Bidiagonal matrix representation.
 ///
 /// A Bidiagonal Representation is a pair
@@ -342,15 +184,19 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
             idx,
             self.size()
         );
-        let (pre, post) = self.0.split_at_mut(idx);
-        let (_e, post) = post.split_first().expect("Something went  wrong");
+
+        // Split at idx + 1.
+        let (pre, post) = self.0.split_at_mut(idx + 1);
+        // Remove the last element from pre.
+        let (_removed, pre) = pre.split_last().expect("Something went  wrong");
+        // Merge pre withouth the last one with the post.
         self.0 = ([pre, post]).concat().into_boxed_slice();
     }
 
     fn to_absorbing(&self) -> Vector<F> {
         let mut rate = self.0[self.0.len() - 1].clone();
         rate.neg_assign();
-        let mut vector = Vector::zero(self.size());
+        let mut vector = Vector::zeros(self.size());
         if let Some(first) = vector.elements.get_mut(self.size() - 1) {
             *first = rate;
         }
@@ -514,7 +360,7 @@ impl<F: PseudoField> Representation<F> for TriangularArray<F> {
     }
 
     fn to_absorbing(&self) -> Vector<F> {
-        let mut vector = Vector::zero(self.size);
+        let mut vector = Vector::zeros(self.size);
         for row in 0..self.size() {
             let mut row_sum = self.row_sum(row);
             row_sum.neg_assign();
@@ -613,17 +459,18 @@ impl<F: PseudoField> Triangular<F> {
             idx <= self.size(),
             "Slice index can not be larger than the size of the representation."
         );
-        let mut res= vec![F::zero(); idx];
+        let mut res = vec![F::zero(); idx];
         for row in 0..idx {
             let mut sum = F::zero();
             for column in row..idx {
                 if column >= idx {
-                    // Skip elements in the column to be removed
                     continue;
-                }else{
+                } else {
                     sum.add_assign(&self.get(row, column));
                 };
             }
+            // correct the value if needed.
+            sum.is_almost_zero_and_correct();
             res[row] = sum;
         }
         res
@@ -641,8 +488,7 @@ impl<F: PseudoField> Triangular<F> {
         self.remove_state(self.size - 1);
     }
 
-    #[allow(dead_code)]
-    fn dot_product(&self, other: &Triangular<F>) -> Triangular<F> {
+    pub fn dot_product(&self, other: &Triangular<F>) -> Triangular<F> {
         assert!(
             other.size == self.size,
             "Sizes do not match. {:?} vs {:?}.",
@@ -666,6 +512,7 @@ impl<F: PseudoField> Triangular<F> {
         }
         dst
     }
+
     pub fn matrix_power(&self, power: usize) -> Triangular<F> {
         let mut result = Triangular::eye(self.size);
         for _ in 0..power {
@@ -688,7 +535,7 @@ impl<F: PseudoField> Triangular<F> {
 
     pub fn slice(&self, idx: usize) -> Triangular<F> {
         assert!(
-            idx < self.size,
+            idx <= self.size,
             "Slice index has to be large equal that the size of the representation."
         );
         let mut sliced = self.clone();
@@ -723,6 +570,8 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
         for i in idx..self.size() {
             sum.add_assign(&self.get(idx, i));
         }
+        // correct the value if needed.
+        sum.is_almost_zero_and_correct();
         sum
     }
 
@@ -763,7 +612,7 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
     }
 
     fn to_absorbing(&self) -> Vector<F> {
-        let mut vector = Vector::zero(self.size);
+        let mut vector = Vector::zeros(self.size);
         for row in 0..self.size() {
             let mut row_sum = self.row_sum(row);
             row_sum.neg_assign();
@@ -807,7 +656,7 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
         }
         result
     }
-    
+
     fn kron_sum(&self, other: &Triangular<F>) -> Triangular<F> {
         let eye_1 = Triangular::eye(other.size());
         let eye_2 = Triangular::eye(self.size);

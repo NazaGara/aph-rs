@@ -66,7 +66,8 @@ pub fn con_ph<F: PseudoField, R: Representation<F>>(
     Aph {
         initial: delta.into(),
         repr: TriangularArray { size, matrix },
-    }.spa()
+    }
+    .spa()
 }
 
 /// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
@@ -182,6 +183,34 @@ pub fn max_ph<F: PseudoField, R: Representation<F>>(
         repr: TriangularArray { size, matrix },
     }
     .spa()
+}
+
+pub fn test_max_phs<F: PseudoField, R: Representation<F>>(
+    instances: &[Aph<F, R>],
+) -> Option<Aph<F, Bidiagonal<F>>> {
+    if instances.is_empty() {
+        return None;
+    }
+    let mut result = instances.get(0).unwrap().spa();
+    let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
+    for instance in &instances[1..] {
+        result = max_ph(&result, &instance);
+    }
+    Some(result)
+}
+
+pub fn test_min_phs<F: PseudoField, R: Representation<F>>(
+    instances: &[Aph<F, R>],
+) -> Option<Aph<F, Bidiagonal<F>>> {
+    if instances.is_empty() {
+        return None;
+    }
+    let mut result = instances.get(0).unwrap().spa();
+    let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
+    for instance in &instances[1..] {
+        result = min_ph(&result, &instance);
+    }
+    Some(result)
 }
 
 pub fn max_phs<F: PseudoField, R: Representation<F>>(
