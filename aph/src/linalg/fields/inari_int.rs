@@ -1,9 +1,10 @@
 use std::{
     fmt::Display,
+    marker::PhantomData,
     ops::{Add, Mul, Sub},
 };
 
-use super::{Almost, ContFraction, FromCF, FromRational, PseudoField, ToRational};
+use super::{Almost, ContFraction, FromCF, FromRational, PseudoField, Rounding, ToRational};
 use inari::*;
 use log::warn;
 use num_rational::Ratio;
@@ -11,34 +12,35 @@ use num_traits::{One, Zero};
 use rug::{ops::CompleteRound, Float};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Interval(inari::Interval);
+pub struct Interval<R: Rounding>(inari::Interval, PhantomData<R>);
 
-impl PseudoField for Interval {
+impl<R: Rounding> PseudoField for Interval<R> {
     fn neg_assign(&mut self) {
-        self.mul_assign(&Self(interval_exact!("[-1.0]").unwrap()))
+        self.mul_assign(&Self(interval_exact!("[-1.0]").unwrap(), PhantomData))
     }
 
     fn abs_assign(&mut self) {
-        *self = Self(self.0.abs())
+        *self = Self(self.0.abs(), PhantomData);
     }
 
     fn add_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.add(rhs.0))
+        *self = Self(self.0.add(rhs.0), PhantomData);
     }
 
     fn sub_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.sub(rhs.0))
+        *self = Self(self.0.sub(rhs.0), PhantomData);
     }
 
     fn mul_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.mul(rhs.0))
+        *self = Self(self.0.mul(rhs.0), PhantomData);
     }
 
     fn div_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0 / rhs.0);
+        *self = Self(self.0 / rhs.0, PhantomData);
     }
 
     fn inv_assign(&mut self) {
+        // Assuming that are both are positive, or both negative
         let new_sup = if self.0.inf().is_infinite() {
             0.0
         } else if self.0.inf().is_zero() {
@@ -61,33 +63,37 @@ impl PseudoField for Interval {
         } else {
             1.0 / self.0.sup()
         };
-        self.div_assign(&Self(interval!(new_inf, new_sup).unwrap()));
+        self.div_assign(&Self(interval!(new_inf, new_sup).unwrap(), PhantomData));
     }
 
     fn to_string(&self) -> String {
-        format!("<{},{}>", self.0.inf(), self.0.sup())
+        format!(
+            "{}",
+            match R::rounding() {
+                super::Round::Down | super::Round::Zero => self.0.inf(),
+                super::Round::Nearest => self.0.mid(),
+                super::Round::Up => self.0.sup(),
+            }
+        )
     }
 }
 
-impl Display for Interval {
+impl<R: Rounding> Display for Interval<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{:.53}, {:.53}>", self.0.inf(), self.0.sup())
+        write!(f, "<{:?}, {:?}>", self.0.inf(), self.0.sup())
     }
 }
 
-impl FromRational for Interval {
+impl<R: Rounding> FromRational for Interval<R> {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
         let num = Float::parse(numerator).unwrap().complete(53);
         let den = Float::parse(denominator).unwrap().complete(53);
         let div = (num / den).to_f64();
-        Self(interval!(div, div).unwrap())
-    }
-    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self {
-        Self::from_rational(numerator, denominator)
+        Self(interval!(div, div).unwrap(), PhantomData)
     }
 }
 
-impl ToRational for Interval {
+impl<R: Rounding> ToRational for Interval<R> {
     fn to_rational(&self) -> (String, String) {
         let ratio = Ratio::from_float(self.0.mid())
             .expect("Something went wrong when converting the Interval to Rational.");
@@ -95,27 +101,53 @@ impl ToRational for Interval {
     }
 }
 
-impl FromCF for Interval {
+impl<R: Rounding> FromCF for Interval<R> {
     fn from_cont_fraction(cf: &mut ContFraction) -> Self {
         if cf.values.len() <= 1 {
-            return Interval::from_rational(&format!("{:?}", cf.values[0]), "1");
+            Interval::from_rational(&format!("{:?}", cf.values[0]), "1")
         } else {
             let val = Interval::from_rational(&format!("{:?}", cf.values.remove(0)), "1");
             let mut rgt = Self::one();
             rgt.div_assign(&Interval::from_cont_fraction(&mut ContFraction {
                 values: cf.values.clone(),
             }));
-            return val + rgt;
+            val + rgt
         }
     }
 }
 
-impl Almost for Interval {
+impl<R: Rounding> Almost for Interval<R> {
+    fn almost_zero(&self) -> bool {
+        // Option 2: The middle point is eps close to zero.
+        // self.0.mid().abs() <= f64::EPSILON
+
+        // Option 1-3: The interval is contianed in <-eps, +eps>
+        if !self.0.contains(0.0) {
+            return false;
+        }
+        self.0
+            .interior(const_interval!(-f64::EPSILON, f64::EPSILON))
+
+        // Option 4: The interval is the point interval <0.0,0.0>
+        // self.is_zero()
+
+        // Option 5: Middle point is exactly zero.
+        // self.0.mid().is_zero()
+    }
+
+    fn almost_one(&self) -> bool {
+        if !self.0.contains(1.0) {
+            return false;
+        }
+        self.0
+            .interior(const_interval!(1.0 - f64::EPSILON, 1.0 + f64::EPSILON))
+    }
+
     fn cmp_eq(&self, other: &Self) -> bool {
         let abstol = Self::from_rational("1", "10000000");
         let epsi = Self::from_rational("1", "10000");
 
-        if self.eq(&other) {
+        if self.eq(other) {
             return true;
         }
         let mut diff = self.clone().sub(other.clone());
@@ -138,41 +170,11 @@ impl Almost for Interval {
         .mul(epsi.clone());
         diff.le(&reltol)
     }
-
-    fn is_almost_zero(&self) -> bool {
-        // Option 1: Strict absolute tolerance in both bounds w.r.t. epsilon.
-        // if !self.0.contains(0.0) {
-        //     return false;
-        // }
-        // let mut self_abs = self.clone();
-        // self_abs.abs_assign();
-        // let epsilon = Self::from_rational(&format!("{:?}", f64::EPSILON), "1");
-        // self_abs.le(&epsilon)
-
-        // Option 2: The middle point is eps close to zero.
-        self.0.mid().abs() <= f64::EPSILON
-
-        // Option 3: The interval is contianed in <-eps, +eps>
-        // self.0
-        //     .interior(const_interval!(-f64::EPSILON, f64::EPSILON))
-
-        // Option 4: The interval is the point interval <0.0,0.0>
-        // self.is_zero()
-
-        // Option 5: Middle point is exactly zero.
-        // self.0.mid().is_zero()
-    }
-
-    fn is_almost_zero_and_correct(&mut self) {
-        if self.is_almost_zero() {
-            self.set_zero();
-        };
-    }
 }
 
-impl num_traits::One for Interval {
+impl<R: Rounding> num_traits::One for Interval<R> {
     fn one() -> Self {
-        Self(const_interval!(1.0, 1.0))
+        Self(const_interval!(1.0, 1.0), PhantomData)
     }
 
     fn is_one(&self) -> bool {
@@ -184,9 +186,9 @@ impl num_traits::One for Interval {
     }
 }
 
-impl num_traits::Zero for Interval {
+impl<R: Rounding> num_traits::Zero for Interval<R> {
     fn zero() -> Self {
-        Self(const_interval!(0.0, 0.0))
+        Self(const_interval!(0.0, 0.0), PhantomData)
     }
 
     fn is_zero(&self) -> bool {
@@ -198,46 +200,36 @@ impl num_traits::Zero for Interval {
     }
 }
 
-impl Add for Interval {
+impl<R: Rounding> Add for Interval<R> {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0.add(rhs.0))
+        Self(self.0.add(rhs.0), PhantomData)
     }
 }
 
-impl Mul for Interval {
+impl<R: Rounding> Mul for Interval<R> {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        Self(self.0.mul(rhs.0))
+        Self(self.0.mul(rhs.0), PhantomData)
     }
 }
 
-impl Sub for Interval {
+impl<R: Rounding> Sub for Interval<R> {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0.sub(rhs.0))
+        Self(self.0.sub(rhs.0), PhantomData)
     }
 }
 
-impl PartialOrd for Interval {
+impl<R: Rounding> PartialOrd for Interval<R> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        use std::cmp::Ordering::*;
-
-        match (
-            self.0.inf().partial_cmp(&other.0.inf())?,
-            self.0.sup().partial_cmp(&other.0.sup())?,
-        ) {
-            (Equal, Equal) => Some(Equal),
-            (Less, Less) => Some(Less),
-            (Greater, Greater) => Some(Greater),
-            (Less, Greater) => None,
-            (Greater, Less) => None,
-            (Greater, Equal) => Some(Greater),
-            (Equal, Greater) => Some(Greater),
-            (Less, Equal) => Some(Less),
-            (Equal, Less) => Some(Less),
-            // _ => unreachable!(),
+        if self.0.strict_less(other.0) {
+            Some(std::cmp::Ordering::Less)
+        } else if other.0.strict_less(self.0) {
+            Some(std::cmp::Ordering::Greater)
+        } else {
+            Some(std::cmp::Ordering::Equal)
         }
     }
 }

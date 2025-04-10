@@ -53,6 +53,7 @@
 //! Note that the traits are defined with heap-allocated numeric types in mind.
 
 use ndarray::Array2;
+use num_rational::Ratio;
 use rug::ops::AddFrom;
 use rug::ops::SubFrom;
 use rug::Integer;
@@ -62,17 +63,14 @@ use std::{
     ops::{Add, Sub},
 };
 
-pub mod float64_round;
-// pub mod float32;
-pub mod interval_field;
 pub mod float64;
-pub mod float64_cf;
-pub mod rational;
+pub mod float64_round;
 pub mod inari_int;
+pub mod interval_field;
+pub mod rational;
 
 pub trait FromRational: Sized {
     fn from_rational(numerator: &str, denominator: &str) -> Self;
-    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self;
 }
 
 pub trait ToRational: Sized {
@@ -83,10 +81,10 @@ pub trait FromCF: Sized {
     fn from_cont_fraction(value: &mut ContFraction) -> Self;
 }
 
-pub trait Almost: Sized {
-    fn is_almost_zero(&self) -> bool;
+pub trait Almost: Sized + num_traits::One + num_traits::Zero {
+    fn almost_zero(&self) -> bool;
+    fn almost_one(&self) -> bool;
     fn cmp_eq(&self, other: &Self) -> bool;
-    fn is_almost_zero_and_correct(&mut self);
 }
 
 /// A [`Field`] is a numeric type satisfying all field axioms, e.g., arbitrary-precision
@@ -187,17 +185,41 @@ pub trait SparseField:
     + Display
     + Hash
     + Almost
-    + FromCF
+    + FromCF 
 {
+    /// Machine epsilon value for F, based on f64::EPSILON.
+    /// This is the difference between 1.0 and the next larger representable number.
+    fn epsilon() -> Self {
+        let ratio = Ratio::from_float(f64::EPSILON).unwrap();
+        Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
+    }
+
+    /// Absolute tolerance threshold to use when comparing bwetween two no-zero values.
+    fn abstol() -> Self {
+        let ratio = Ratio::from_float(1e-16).unwrap();
+        Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
+    }
+
+    /// Relative tolerance threshold to use when comparing bwetween two no-zero values.
+    fn reltol() -> Self {
+        let ratio = Ratio::from_float(1e-4).unwrap();
+        Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
+    }
+
+    fn inf() -> Self{
+        let ratio = Ratio::from_float(1.0_f64.powf(-300.0)).unwrap();
+        Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
+    }
+
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
+    fn inv_assign(&mut self);
 
     fn add_assign(&mut self, rhs: &Self, round: Round);
     fn sub_assign(&mut self, rhs: &Self, round: Round);
     fn mul_assign(&mut self, rhs: &Self, round: Round);
     fn div_assign(&mut self, rhs: &Self, round: Round);
 
-    fn inv(&mut self);
     fn to_string(&self) -> String;
 }
 
@@ -218,17 +240,17 @@ pub trait PseudoField:
     + Eq
     + Hash
     + Almost
-    + FromCF
+    + FromCF 
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
+    fn inv_assign(&mut self);
 
     fn add_assign(&mut self, rhs: &Self);
     fn sub_assign(&mut self, rhs: &Self);
     fn mul_assign(&mut self, rhs: &Self);
     fn div_assign(&mut self, rhs: &Self);
 
-    fn inv_assign(&mut self);
     fn to_string(&self) -> String;
 }
 
@@ -258,8 +280,9 @@ impl<T: SparseField> PseudoField for T {
     }
 
     fn inv_assign(&mut self) {
-        self.inv();
+        self.inv_assign();
     }
+
     fn to_string(&self) -> String {
         self.to_string()
     }
@@ -304,7 +327,7 @@ pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<
         Array2::eye(n);
 
     for _ in 0..power {
-        result = dot_product(&result, &matrix);
+        result = dot_product(&result, matrix);
         // result = strassen(&result, &matrix);
     }
     result
@@ -341,7 +364,7 @@ impl ContFraction {
 
     pub fn _evaluate(&mut self) -> f64 {
         if self.values.len() == 1 {
-            return self.values.remove(0).to_i128_wrapping() as f64;
+            self.values.remove(0).to_i128_wrapping() as f64
         } else {
             let val = self.values.remove(0).to_i128_wrapping() as f64;
             let rest = 1.0 / ContFraction::new(self.values.clone())._evaluate();
@@ -371,38 +394,6 @@ impl ContFraction {
         }
     }
 
-    pub fn from_z3_with_precision(value: &z3::ast::Real<'_>, precision: usize) -> Self {
-        let real_str = value
-            .to_string()
-            .replace("(", "")
-            .replace(")", "")
-            .replace(".0", "");
-        if let Some((_, num_and_denom_str)) = real_str.split_once("/ ") {
-            let (num_str, denom_str) = num_and_denom_str
-                .split_once(" ")
-                .expect("Something went wrong");
-            let num_str = num_str.trim();
-            let denom_str = denom_str.trim();
-            let mut fractions = vec![];
-            let mut numer = num_str.parse::<rug::Integer>().unwrap();
-            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
-            let (mut quot, mut rest) = numer.div_rem(denom.clone());
-            fractions.push(quot);
-            for _ in 1..precision {
-                numer = denom;
-                denom = rest;
-                (quot, rest) = numer.div_rem(denom.clone());
-                fractions.push(quot);
-                if rest.is_zero() {
-                    break;
-                }
-            }
-            ContFraction::new(fractions)
-        } else {
-            ContFraction::new(vec![real_str.parse::<rug::Integer>().unwrap()])
-        }
-    }
-
     pub fn from_explicit_with_precision(numer: &str, denom: &str, precision: usize) -> Self {
         if denom.eq("1") {
             ContFraction::new(vec![numer.trim().parse::<rug::Integer>().unwrap()])
@@ -424,37 +415,6 @@ impl ContFraction {
                 }
             }
             ContFraction::new(fractions)
-        }
-    }
-}
-
-impl From<&z3::ast::Real<'_>> for ContFraction {
-    fn from(value: &z3::ast::Real<'_>) -> Self {
-        let rat_str = value
-            .to_string()
-            .replace("(", "")
-            .replace(")", "")
-            .replace(".0", "");
-        if let Some((_, num_and_denom_str)) = rat_str.split_once("/ ") {
-            let (num_str, denom_str) = num_and_denom_str
-                .split_once(" ")
-                .expect("Something went wrong");
-            let num_str = num_str.trim();
-            let denom_str = denom_str.trim();
-            let mut fractions = vec![];
-            let mut numer = num_str.parse::<rug::Integer>().unwrap();
-            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
-            let (mut quot, mut rest) = numer.div_rem(denom.clone());
-            fractions.push(quot);
-            while rest != 0 {
-                numer = denom;
-                denom = rest;
-                (quot, rest) = numer.div_rem(denom.clone());
-                fractions.push(quot);
-            }
-            ContFraction::new(fractions)
-        } else {
-            ContFraction::new(vec![rat_str.parse::<rug::Integer>().unwrap()])
         }
     }
 }

@@ -1,16 +1,15 @@
 //! Data structures and algorithms for the representation of the matrix.
-use std::fmt::Display;
-
 use linalg::{fields::PseudoField, Vector};
 use ndarray::{Array, Array1, Array2, Axis};
+use std::io::Write;
+use std::{fmt::Display, fs::File};
 
 use crate::linalg;
 
 pub enum RepresentationType {
     Bidiagonal,
-    Triangular,
     TriangularArray,
-    TriangularNG,
+    Triangular,
 }
 pub trait Representation<F: PseudoField> {
     /// The size $N$ of the APH representation.
@@ -39,9 +38,7 @@ pub trait Representation<F: PseudoField> {
 
     fn to_array_repr(&self) -> TriangularArray<F>;
 
-    fn to_ta_repr(&self) -> Triangular<F> {
-        todo!()
-    }
+    fn to_ta_repr(&self) -> Triangular<F>;
 
     fn row_sum(&self, idx: usize) -> F;
 
@@ -61,9 +58,7 @@ pub trait Representation<F: PseudoField> {
     fn is_bidiagonal(&self) -> bool {
         match self.is_type() {
             RepresentationType::Bidiagonal => true,
-            RepresentationType::Triangular
-            | RepresentationType::TriangularNG
-            | RepresentationType::TriangularArray => {
+            RepresentationType::Triangular | RepresentationType::TriangularArray => {
                 for row in 0..self.size() - 1 {
                     let val = self.get(row, row);
                     let mut neg_val = self.get(row, row + 1);
@@ -72,7 +67,7 @@ pub trait Representation<F: PseudoField> {
                         return false;
                     }
                 }
-                return true;
+                true
             }
         }
     }
@@ -108,8 +103,18 @@ impl<F: PseudoField> Bidiagonal<F> {
     pub fn into_ordered(&mut self) {
         self.0.sort_by(|x, y| {
             y.partial_cmp(x)
-                .expect(&format!("Could not sort the values: {:?} and {:?}.", x, y))
+                .unwrap_or_else(|| panic!("Could not sort the values: {:?} and {:?}.", y, x))
         })
+    }
+
+    pub fn eye(size: usize) -> Self {
+        Self(vec![F::one(); size].into())
+    }
+}
+
+impl<F: PseudoField> From<Vector<F>> for Bidiagonal<F> {
+    fn from(value: Vector<F>) -> Self {
+        Bidiagonal(value.elements)
     }
 }
 
@@ -165,12 +170,10 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
 
     fn kron_prod(&self, _other: &Bidiagonal<F>) -> Bidiagonal<F> {
         todo!();
-        // self.to_array_repr().kron_prod(&_other.to_array_repr())
     }
 
     fn kron_sum(&self, _other: &Bidiagonal<F>) -> Bidiagonal<F> {
         todo!();
-        // self.to_array_repr().kron_sum(&_other.to_array_repr())
     }
 
     fn diagonal(&self, row: usize) -> F {
@@ -222,6 +225,17 @@ impl<F: PseudoField> Display for TriangularArray<F> {
 }
 
 impl<F: PseudoField + Sized> TriangularArray<F> {
+    pub fn export_to_csv(&self, filename: &str) -> std::io::Result<()> {
+        let mut file = File::create(filename)?;
+        for row in self.matrix.outer_iter() {
+            let row_str: Vec<String> = row.iter().map(|x| x.to_string()).collect();
+            writeln!(file, "{}", row_str.join(" "))?;
+        }
+        Ok(())
+    }
+
+    // pub fn spa_with_explicit
+
     /// Creates a new triangular representation of the given *size* filled with zeros.
     pub fn new(size: usize) -> Self {
         // We can skip the last row, the last state is an absorbing one
@@ -315,6 +329,10 @@ impl<F: PseudoField> Representation<F> for TriangularArray<F> {
         self.clone()
     }
 
+    fn to_ta_repr(&self) -> Triangular<F> {
+        todo!()
+    }
+
     fn kron_prod(&self, other: &TriangularArray<F>) -> TriangularArray<F> {
         let result = kronecker_product_array(
             &self.matrix,
@@ -405,7 +423,7 @@ impl<F: PseudoField> Triangular<F> {
         tri
     }
 
-    pub fn new_with_diagonal(diag: &Vec<F>) -> Self {
+    pub fn new_with_diagonal(diag: &[F]) -> Self {
         let mut ta = Triangular::new(diag.len());
         for i in 0..ta.size - 1 {
             let mut elem = diag[i].clone();
@@ -431,7 +449,7 @@ impl<F: PseudoField> Triangular<F> {
         );
         assert!(
             column < self.size,
-            "Column index out of bounds. Index: {:?}, size: {:?}",
+            "Column index out of bounds. Column: {:?}, size: {:?}",
             column,
             self.size
         );
@@ -454,6 +472,25 @@ impl<F: PseudoField> Triangular<F> {
         self.matrix[self.idx(row, column)].clone()
     }
 
+    pub fn row_sum_sliced_from(&self, from_idx: usize, to_idx: usize) -> Vec<F> {
+        assert!(
+            to_idx <= self.size(),
+            "Slice index can not be larger than the size of the representation."
+        );
+        let mut res = vec![F::zero(); to_idx];
+        for row in from_idx..to_idx {
+            let mut sum = F::zero();
+            for column in row..to_idx {
+                if column >= to_idx {
+                    continue;
+                } else {
+                    sum.add_assign(&self.get(row, column));
+                };
+            }
+            res[row] = sum;
+        }
+        res
+    }
     pub fn row_sum_sliced(&self, idx: usize) -> Vec<F> {
         assert!(
             idx <= self.size(),
@@ -469,8 +506,6 @@ impl<F: PseudoField> Triangular<F> {
                     sum.add_assign(&self.get(row, column));
                 };
             }
-            // correct the value if needed.
-            sum.is_almost_zero_and_correct();
             res[row] = sum;
         }
         res
@@ -544,6 +579,10 @@ impl<F: PseudoField> Triangular<F> {
         }
         sliced
     }
+
+    pub fn from_self_sliced(bidi: &Bidiagonal<F>, index: usize) -> Self {
+        Triangular::new_with_diagonal(&bidi.0.split_at(index).0.to_vec())
+    }
 }
 
 impl<F: PseudoField> From<&Bidiagonal<F>> for Triangular<F> {
@@ -562,7 +601,7 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
     }
 
     fn is_type(&self) -> RepresentationType {
-        RepresentationType::TriangularNG
+        RepresentationType::Triangular
     }
 
     fn row_sum(&self, idx: usize) -> F {
@@ -570,8 +609,8 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
         for i in idx..self.size() {
             sum.add_assign(&self.get(idx, i));
         }
-        // correct the value if needed.
-        sum.is_almost_zero_and_correct();
+        // // correct the value if needed.
+        // sum.is_almost_zero_and_correct();
         sum
     }
 
@@ -626,9 +665,21 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
     }
 
     fn to_array_repr(&self) -> TriangularArray<F> {
-        todo!()
-    }
+        // This can be done faster.
+        let mut ta = TriangularArray::new(self.size);
 
+        for n in 0..self.size {
+            for m in 0..self.size {
+                if n > m {
+                    continue;
+                }
+                ta.set(n, m, self.get(n, m));
+            }
+        }
+
+        ta
+    }
+    // FIXME: Out of index
     fn kron_prod(&self, other: &Triangular<F>) -> Triangular<F> {
         let size_c = self.size() * self.size();
         let mut result = Triangular::new(size_c);
@@ -697,7 +748,7 @@ pub fn kronecker_product_array<F: PseudoField>(
                     let row_c = n * rows_b + k;
                     let col_c = m * cols_b + l;
                     let mut val = a_nm.clone();
-                    val.mul_assign(&b_kl);
+                    val.mul_assign(b_kl);
                     *result.get_mut((row_c, col_c)).unwrap() = val;
                 }
             }

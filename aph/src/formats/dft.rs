@@ -1,81 +1,109 @@
 use std::collections::HashMap;
 use std::fs;
-use std::marker::PhantomData;
 use std::path::Path;
 
 use itertools::Itertools;
+use log::info;
 
 use crate::linalg::fields::PseudoField;
-use crate::operations::{test_max_phs, test_min_phs};
+use crate::operations::{try_max_phs, try_min_phs};
 use crate::representation::Bidiagonal;
 use crate::Aph;
 
 #[derive(Debug, Clone)]
-pub enum NodeType {
+pub enum NodeType<F: PseudoField> {
     And,
     Or,
-    BasicEventExp(String, String),
-    BasicEventErl(usize, String, String),
+    BasicEventExp(F),
+    BasicEventErl(usize, F),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Node<F: PseudoField> {
     _name: String,
-    node_type: NodeType,
+    node_type: NodeType<F>,
     children: Vec<String>,
-    // aph: Option<Aph<F,Bidiagonal<F>>>,
-    phantom: PhantomData<F>,
 }
+
 
 impl<F: PseudoField> Node<F> {
-    fn new(name: &str, node_type: NodeType, children: Vec<String>) -> Self {
+    fn new(_name: String, node_type: NodeType<F>, children: Vec<String>) -> Self {
         Self {
-            _name: name.to_string(),
+            _name,
             node_type,
             children,
-            phantom: PhantomData,
         }
     }
-    pub fn to_aph(&self, nodes: &HashMap<String, Node<F>>) -> Aph<F, Bidiagonal<F>> {
+
+    pub fn to_aph(&self, nodes: &HashMap<String, Node<F>>) -> (Aph<F, Bidiagonal<F>>, usize) {
+        let knowns: HashMap<String, Aph<F, Bidiagonal<F>>> = HashMap::new();
         // I need a depth measure of each node. Then, I spawn k-threads, and they do the reductions on each depth level.
-        match &self.node_type {
-            NodeType::BasicEventExp(numer, denom) => {
-                Aph::<F, Bidiagonal<F>>::_new_exp(numer, denom)
-            }
-            NodeType::BasicEventErl(phases, numer, denom) => {
-                Aph::<F, Bidiagonal<F>>::_new_erl(*phases, numer, denom)
-            }
-            NodeType::And => {
-                let ch_nodes = self
-                    .children
-                    .clone()
-                    .iter()
-                    .map(|c| nodes.get(c).unwrap())
-                    .collect_vec();
+        let mut total_reductions = 0;
 
-                let nodes = ch_nodes.iter().map(|n| n.to_aph(nodes)).collect_vec();
+        if knowns.keys().contains(&self._name) {
+            (knowns.get(&self._name).unwrap().clone(), 0)
+        } else {
+            match &self.node_type {
+                NodeType::BasicEventExp(value) => {
+                    (Aph::<F, Bidiagonal<F>>::explicit_exp(value.to_owned()), 0)
+                }
+                NodeType::BasicEventErl(phases, value) => (
+                    Aph::<F, Bidiagonal<F>>::explicit_erl(*phases, value.to_owned()),
+                    0,
+                ),
+                NodeType::And => {
+                    let ch_nodes = self
+                        .children
+                        .clone()
+                        .iter()
+                        .map(|c| nodes.get(c).unwrap())
+                        .collect_vec();
 
-                let mut aph = test_max_phs(nodes.as_slice()).expect("Something went wrong...");
-                aph.reduce();
+                    info!("- APH of {} childs -", ch_nodes.len(),);
+                    let nodes = ch_nodes
+                        .iter()
+                        .map(|n| {
+                            let (res, r) = n.to_aph(nodes);
+                            total_reductions += r;
+                            res
+                        })
+                        .collect_vec();
+                    let mut aph = try_max_phs(nodes.as_slice()).expect("Something went wrong...");
+                    total_reductions += aph.reduce(); 
+                    (aph, total_reductions)
+                }
+                NodeType::Or => {
+                    let ch_nodes = self
+                        .children
+                        .clone()
+                        .iter()
+                        .map(|c| nodes.get(c).unwrap())
+                        .collect_vec();
 
-                aph
-            }
-            NodeType::Or => {
-                let ch_nodes = self
-                    .children
-                    .clone()
-                    .iter()
-                    .map(|c| nodes.get(c).unwrap())
-                    .collect_vec();
-                let nodes = ch_nodes.iter().map(|n| n.to_aph(nodes)).collect_vec();
-
-                let mut aph = test_min_phs(nodes.as_slice()).expect("Something went wrong...");
-                aph.reduce();
-                aph
+                    info!("- APH of {} childs -", ch_nodes.len(),);
+                    let nodes = ch_nodes
+                        .iter()
+                        .map(|n| {
+                            let (res, r) = n.to_aph(nodes);
+                            total_reductions += r;
+                            res
+                        })
+                        .collect_vec();
+                    let mut aph = try_min_phs(nodes.as_slice()).expect("Something went wrong...");
+                    total_reductions += aph.reduce();
+                    (aph, total_reductions)
+                }
             }
         }
     }
 }
+
+
+
+
+
+
+
 
 #[derive(Debug)]
 pub struct FaultTree<F: PseudoField> {
@@ -122,21 +150,26 @@ impl<F: PseudoField> FaultTree<F> {
                     match operator_or_leaf {
                         "or" | "and" => {
                             let node_type = if operator_or_leaf == "or" {
-                                NodeType::Or
+                                NodeType::<F>::Or
                             } else {
-                                NodeType::And
+                                NodeType::<F>::And
                             };
 
                             // Collect child node names.
                             let children = tokens[2..]
                                 .iter()
                                 .filter(|&s| !s.contains("rate="))
-                                .map(|s| s.trim_matches('"').trim_end_matches("\";").to_string())
+                                .map(|s| {
+                                    s.trim_matches('"')
+                                        .trim_end_matches("\";")
+                                        .trim_end_matches(";")
+                                        .to_string()
+                                })
                                 .collect();
 
                             // Add the node.
                             tree.nodes
-                                .insert(name.clone(), Node::new(&name, node_type, children));
+                                .insert(name.clone(), Node::new(name, node_type, children));
                         }
                         _ if operator_or_leaf.starts_with("lambda=") => {
                             let prob_str = operator_or_leaf
@@ -150,11 +183,11 @@ impl<F: PseudoField> FaultTree<F> {
                                 tree.nodes.insert(
                                     name.clone(),
                                     Node::new(
-                                        &name,
-                                        NodeType::BasicEventExp(
-                                            format!("-{}", prob_str),
-                                            String::from("1"),
-                                        ),
+                                        name,
+                                        NodeType::BasicEventExp(F::from_rational(
+                                            &format!("-{}", prob_str),
+                                            "1",
+                                        )),
                                         vec![],
                                     ),
                                 );
@@ -165,7 +198,7 @@ impl<F: PseudoField> FaultTree<F> {
                         _ if operator_or_leaf.starts_with("phases=") => {
                             let phases_str = operator_or_leaf.strip_prefix("phases=").unwrap();
                             let _phases = phases_str.parse::<usize>().ok();
-                            todo!();
+                            todo!("Parse BE from erlang distributions is not supported yet.");
                         }
                         _ if operator_or_leaf.starts_with("prob=") => {
                             eprintln!("Only BE distributed by exponentials or by erlangs distributions. {}", line);

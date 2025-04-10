@@ -25,50 +25,43 @@ impl Rational {
     // Method to check that if the rational has a large size in his string
     // form, which can lead to Nan or Inf values when parsing to float.
     pub fn is_long(&self) -> bool {
-        self.numer().len() > 12 || self.denom().len() > 12
+        self.numer().chars().count() > 8 && self.denom().chars().count() > 8
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.numer().len(), self.denom().len())
     }
 }
 
 impl Almost for Rational {
-    fn is_almost_zero(&self) -> bool {
-        // With rationals I can use exact comparison.
+    // With rationals I can use exact comparison.
+    fn almost_one(&self) -> bool {
+        self.is_one()
+    }
+    fn almost_zero(&self) -> bool {
         self.is_zero()
     }
     fn cmp_eq(&self, other: &Self) -> bool {
-        self.eq(&other)
+        self.eq(other)
     }
-    fn is_almost_zero_and_correct(&mut self) {}
 }
 
 impl FromCF for Rational {
     fn from_cont_fraction(cf: &mut ContFraction) -> Self {
-        let mut numer = Rational::one();
-        let mut pre_numer = Rational::zero();
-        let mut denom = Rational::zero();
-        let mut pre_denom = Rational::one();
+        let mut numer = Self::one();
+        let mut pre_numer = Self::zero();
+        let mut denom = Self::zero();
+        let mut pre_denom = Self::one();
         for e in cf.values.iter() {
             let a_i = Self::from_rational(&format!("{:?}", e), "1");
             let new_numer = numer.clone() * a_i.clone() + pre_numer;
             let new_denom = denom.clone() * a_i.clone() + pre_denom;
-
             pre_denom = denom;
             pre_numer = numer;
-
             denom = new_denom;
             numer = new_numer;
         }
-
         Self::from_rational(&format!("{:?}", numer), &format!("{:?}", denom))
-        // if cf.values.len() <= 1 {
-        //     return Self::from_rational(&format!("{:?}", cf.values[0]), "1");
-        // } else {
-        //     let val = Rational::from_rational(&format!("{:?}", cf.values.remove(0)), "1");
-        //     let mut rgt = Rational::one();
-        //     rgt.div_assign(&Rational::from_cont_fraction(&mut ContFraction {
-        //         values: cf.values.clone(),
-        //     }));
-        //     return val + rgt;
-        // }
     }
 }
 
@@ -137,30 +130,6 @@ impl From<f64> for Rational {
     }
 }
 
-impl From<&z3::ast::Real<'_>> for Rational {
-    fn from(value: &z3::ast::Real) -> Self {
-        let real_str = value
-            .to_string()
-            .replace("(", "")
-            .replace(")", "")
-            .replace(".0", "");
-        let prefix = if real_str.starts_with("-") { "-" } else { "" };
-        if let Some((_, num_and_denom_str)) = real_str.split_once("/ ") {
-            let (num_str, denom_str) = num_and_denom_str
-                .split_once(" ")
-                .expect("Something went wrong");
-            let num_str = format!("{}{}", prefix, num_str);
-            Rational::from_rational(num_str.trim(), denom_str.trim())
-        } else {
-            Rational(
-                rug::Rational::parse(real_str)
-                    .map(|incomplete| incomplete.complete())
-                    .unwrap(),
-            )
-        }
-    }
-}
-
 impl FromRational for Rational {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
         let result = rug::Rational::parse(format!("{numerator}/{denominator}"))
@@ -175,23 +144,6 @@ impl FromRational for Rational {
         } else {
             Rational(result.unwrap())
         }
-    }
-    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self {
-        Self::from_rational(numerator, denominator)
-        // let num = Float::parse(numerator).unwrap().complete(53);
-        // let den = Float::parse(denominator).unwrap().complete(53);
-        // let moduler = Float::with_val(53, moduler);
-        // let new_num = multiple_of(&num, &moduler, Round::Up)
-        //     .to_integer()
-        //     .expect("")
-        //     .to_string()
-        //     .replace(".0", "");
-        // let new_den = multiple_of(&den, &moduler, Round::Down)
-        //     .to_integer()
-        //     .expect("")
-        //     .to_string()
-        //     .replace(".0", "");
-        // Self::from_rational(&new_num, &new_den)
     }
 }
 
@@ -256,12 +208,12 @@ impl PseudoField for Rational {
                 .numer()
                 .replace("\"", "")
                 .parse::<f64>()
-                .expect(&format!("Value: '{:?}' could not be parsed.", self.numer()));
+                .unwrap_or_else(|_| panic!("Value: '{:?}' could not be parsed.", self.numer()));
             let denom: f64 = self
                 .denom()
                 .replace("\"", "")
                 .parse::<f64>()
-                .expect(&format!("Value: '{:?}' could not be parsed.", self.denom()));
+                .unwrap_or_else(|_| panic!("Value: '{:?}' could not be parsed.", self.denom()));
             numer / denom
         };
 

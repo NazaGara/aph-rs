@@ -2,10 +2,12 @@
 
 use itertools::Itertools;
 use linalg::fields::{dot_product, PseudoField};
-use ndarray::{Array, Array1, Axis};
+use log::info;
+use ndarray::{Array, Array1, Array2, Axis};
 
 use representation::{kronecker_product_array, Representation, TriangularArray};
 
+use crate::linalg::Vector;
 use crate::representation::{self, Bidiagonal};
 use crate::{linalg, Aph};
 
@@ -26,6 +28,7 @@ pub fn con_ph<F: PseudoField, R: Representation<F>>(
     ph2: &Aph<F, R>,
 ) -> Aph<F, Bidiagonal<F>> {
     let size = ph1.size() + ph2.size();
+    info!("New size: {:?} (CON)", size);
     let mut delta = ph1.initial.elements.to_vec();
     delta.append(&mut vec![F::zero(); ph2.size()]);
 
@@ -58,13 +61,15 @@ pub fn con_ph<F: PseudoField, R: Representation<F>>(
     .expect("Something went wrong when assembling the arrays `top`, `mid` and `bot`. Please check that the sizes are correct.");
 
     assert!(
-        matrix.shape() == &[size, size],
+        matrix.shape() == [size, size],
         "Shape of matrix is {:?}, but actual size is {:?}",
         matrix.shape(),
         size
     );
+
+    let delta: Vector<F> = delta.into();
     Aph {
-        initial: delta.into(),
+        initial: delta,
         repr: TriangularArray { size, matrix },
     }
     .spa()
@@ -79,18 +84,14 @@ pub fn min_ph<F: PseudoField, R: Representation<F>>(
     ph2: &Aph<F, R>,
 ) -> Aph<F, Bidiagonal<F>> {
     let size = ph1.size() * ph2.size();
+    info!("New size: {:?} (MIN)", size);
     let delta = ph1.initial.kron_prod(&ph2.initial);
+
     let repr_d = ph1
         .repr()
         .to_array_repr()
         .kron_sum(&ph2.repr.to_array_repr());
 
-    assert!(
-        repr_d.matrix.shape() == &[size, size],
-        "Shape of matrix is {:?}, but actual size is {:?}",
-        repr_d.matrix.shape(),
-        size
-    );
     Aph {
         initial: delta,
         repr: repr_d,
@@ -116,7 +117,7 @@ pub fn max_ph<F: PseudoField, R: Representation<F>>(
     ph2: &Aph<F, R>,
 ) -> Aph<F, Bidiagonal<F>> {
     let size = ph1.size() * ph2.size() + ph1.size() + ph2.size();
-
+    info!("New size: {:?} (MAX)", size);
     let mut delta = ph1.initial.kron_prod(&ph2.initial).elements.to_vec();
     delta.append(&mut vec![F::zero(); ph1.initial.size() + ph2.size()]);
 
@@ -172,11 +173,13 @@ pub fn max_ph<F: PseudoField, R: Representation<F>>(
     .expect("Something went wrong when assembling the arrays `top`, `mid` and `bot`. Please check that the sizes are correct.");
 
     assert!(
-        matrix.shape() == &[size, size],
+        matrix.shape() == [size, size],
         "Shape of matrix is {:?}, but Size is {:?}",
         matrix.shape(),
         size
     );
+
+    
 
     Aph {
         initial: delta.into(),
@@ -185,30 +188,30 @@ pub fn max_ph<F: PseudoField, R: Representation<F>>(
     .spa()
 }
 
-pub fn test_max_phs<F: PseudoField, R: Representation<F>>(
+pub fn try_max_phs<F: PseudoField, R: Representation<F>>(
     instances: &[Aph<F, R>],
 ) -> Option<Aph<F, Bidiagonal<F>>> {
     if instances.is_empty() {
         return None;
     }
-    let mut result = instances.get(0).unwrap().spa();
+    let mut result = instances.first().unwrap().spa();
     let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
     for instance in &instances[1..] {
-        result = max_ph(&result, &instance);
+        result = max_ph(&result, instance);
     }
     Some(result)
 }
 
-pub fn test_min_phs<F: PseudoField, R: Representation<F>>(
+pub fn try_min_phs<F: PseudoField, R: Representation<F>>(
     instances: &[Aph<F, R>],
 ) -> Option<Aph<F, Bidiagonal<F>>> {
     if instances.is_empty() {
         return None;
     }
-    let mut result = instances.get(0).unwrap().spa();
+    let mut result = instances.first().unwrap().spa();
     let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
     for instance in &instances[1..] {
-        result = min_ph(&result, &instance);
+        result = min_ph(&result, instance);
     }
     Some(result)
 }
@@ -219,10 +222,11 @@ pub fn max_phs<F: PseudoField, R: Representation<F>>(
     if instances.is_empty() {
         return None;
     }
-    let mut result = instances.get(0).unwrap().spa();
+    let mut result = instances.first().unwrap().spa();
     let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
     for instance in &instances[1..] {
-        result = max_ph(&result, &instance);
+        result = max_ph_opt(&result, instance);
+        result.reduce();
     }
     Some(result)
 }
@@ -233,10 +237,11 @@ pub fn min_phs<F: PseudoField, R: Representation<F>>(
     if instances.is_empty() {
         return None;
     }
-    let mut result = instances.get(0).unwrap().spa();
+    let mut result = instances.first().unwrap().spa();
     let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
     for instance in &instances[1..] {
-        result = min_ph(&result, &instance);
+        result = min_ph_opt(&result, instance);
+        result.reduce();
     }
     Some(result)
 }
@@ -247,10 +252,225 @@ pub fn con_phs<F: PseudoField, R: Representation<F>>(
     if instances.is_empty() {
         return None;
     }
-    let mut result = instances.get(0).unwrap().spa();
+    let mut result = instances.first().unwrap().spa();
     let instances = instances.iter().map(|aph| aph.spa()).collect_vec();
     for instance in &instances[1..] {
-        result = con_ph(&result, &instance);
+        result = con_ph(&result, instance);
+        result.reduce();
     }
     Some(result)
+}
+
+// Lazy computation of max and Min according to Eq 5.9.
+/// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
+/// the minimum between them is the PH: $(\overrightarrow{\alpha} \oplus \overrightarrow{\beta}, \mathbf{A} \otimes \mathbf{B})$
+///
+/// Computes $min\{ph1, ph2\}$ and reduces to almost minimal size.
+pub fn min_ph_opt<F: PseudoField>(
+    ph1: &Aph<F, Bidiagonal<F>>,
+    ph2: &Aph<F, Bidiagonal<F>>,
+) -> Aph<F, Bidiagonal<F>> {
+    let delta = ph1.initial.kron_prod(&ph2.initial);
+    let unique_rates_a = ph1.unique_rates();
+    let unique_rates_b = ph2.unique_rates();
+    let mut bidi: Vec<F> = vec![];
+
+    // All rates are sum of rates
+    for (lambda, k) in &unique_rates_a {
+        for (mu, l) in &unique_rates_b {
+            let amount = k + l - 1;
+            let rate = lambda.clone() + mu.clone();
+            bidi.extend(vec![rate; amount]);
+        }
+    }
+    bidi.sort_by(|x, y| {
+        y.partial_cmp(x)
+            .unwrap_or_else(|| panic!("Could not sort the values: {:?} and {:?}.", y, x))
+    });
+    let bidiagonal = Bidiagonal::<F>::from(Vector::from(bidi));
+    let getter = |i, j| lazy_kron_sum::<F, Bidiagonal<F>>(ph1.repr(), ph2.repr(), i, j);
+    
+    Aph::<F, Bidiagonal<F>>::spa_from_explicit(&delta, &getter, bidiagonal)
+}
+
+/// Given two PH distributions $(\overrightarrow{\alpha}, \mathbf{A})$, $(\overrightarrow{\beta}, \mathbf{B})$ of size $m$ and $n$ respectively. Then:
+/// the maximum between them is the PH: $( \[ \overrightarrow{\alpha} \otimes \overrightarrow{\beta}, \overrightarrow{\beta}_{n+1}\overrightarrow{\alpha}, \overrightarrow{\alpha}_{m+1}\overrightarrow{\beta} \], \mathbf{D})$
+/// where:
+/// $$
+/// \mathbf{D} =
+/// \begin{bmatrix}
+/// \mathbf{A} \oplus \mathbf{B} & \mathbf{I}_{m} \otimes \overrightarrow{B} & \overrightarrow{A} \otimes \mathbf{I}_n   \\
+/// \mathbf{0}                   & \mathbf{A}                                & \mathbf{0}                                \\
+/// \mathbf{0}                   & \mathbf{0}                                & \mathbf{B}
+/// \end{bmatrix}
+/// $$
+///
+/// Computes $max\{ph1, ph2\}$ and reduces to almost minimal size.
+pub fn max_ph_opt<F: PseudoField>(
+    ph1: &Aph<F, Bidiagonal<F>>,
+    ph2: &Aph<F, Bidiagonal<F>>,
+) -> Aph<F, Bidiagonal<F>> {
+    let mut delta = ph1.initial.kron_prod(&ph2.initial).elements.to_vec();
+    delta.append(&mut vec![F::zero(); ph1.initial.size() + ph2.size()]);
+
+    let unique_rates_a = ph1.unique_rates();
+    let unique_rates_b = ph2.unique_rates();
+    let mut bidi: Vec<F> = vec![];
+
+    // Unique rates from each are repeated the same number of times as before, their number of states with the sums of rates can be reduced.
+    for (lambda, k) in &unique_rates_a {
+        bidi.extend(vec![lambda.clone(); *k]);
+        for (mu, l) in &unique_rates_b {
+            bidi.extend(vec![mu.clone(); *l]);
+            let amount = k + l - 1;
+            let rate = lambda.clone() + mu.clone();
+            bidi.extend(vec![rate; amount]);
+        }
+    }
+    bidi.sort_by(|x, y| {
+        y.partial_cmp(x)
+            .unwrap_or_else(|| panic!("Could not sort the values: {:?} and {:?}.", y, x))
+    });
+    let bidiagonal = Bidiagonal::<F>::from(Vector::from(bidi));
+
+    // let getter = |i, j| lazy_block::<F, Bidiagonal<F>>(&ph1.repr(), &ph2.repr(), i, j);
+
+    let vec_a = Array::from(ph1.repr().to_absorbing());
+    let vec_b = Array::from(ph2.repr().to_absorbing());
+    let arr_a = vec_a.to_shape((ph1.size(), 1)).unwrap().to_owned();
+    let eye_m = Array::eye(ph2.size());
+    let arr_b = vec_b.to_shape((ph2.size(), 1)).unwrap().to_owned();
+    let eye_n = Array::eye(ph1.size());
+
+    let getter = |i, j| {
+        lazy_max_block::<F, Bidiagonal<F>>(
+            ph1.repr(),
+            ph2.repr(),
+            &arr_a,
+            &eye_m,
+            &arr_b,
+            &eye_n,
+            i,
+            j,
+        )
+    };
+
+    
+    Aph::<F, Bidiagonal<F>>::spa_from_explicit(&delta.into(), &getter, bidiagonal)
+}
+
+/// Compute the entry [i,j] of the block matrix from the Max of two representations in a lazy manner, i.e. only compute the
+/// desired entry and not the entire matrix.
+fn lazy_max_block<F: PseudoField, R: Representation<F>>(
+    repr_a: &R,
+    repr_b: &R,
+    arr_a: &Array2<F>,
+    eye_m: &Array2<F>,
+    arr_b: &Array2<F>,
+    eye_n: &Array2<F>,
+    i: usize,
+    j: usize,
+) -> F {
+    let n = repr_a.size();
+    let m = repr_b.size();
+    assert!(
+        usize::max(i, j) < n * m + n + m,
+        "Out of bounds for index ({},{})",
+        i,
+        j
+    );
+    let nm = n * m;
+
+    if i > j {
+        F::zero()
+    } else if i < nm && j < nm {
+        // Top lft block, A + B
+        lazy_kron_sum(repr_a, repr_b, i, j)
+    } else if i < nm && nm <= j && j < nm + n {
+        // Top mid block, I_n x B_abs
+        let local_j = j - nm;
+        lazy_kron_prod(eye_n, arr_b, i, local_j)
+    } else if i < nm && j < nm + n + m {
+        // Top rgt block, A_abs x I_m
+        let local_j = j - (nm + n);
+        lazy_kron_prod(arr_a, eye_m, i, local_j)
+    } else if nm <= i && i < nm + n && nm <= j && j < nm + n {
+        // Middle-middle block: A
+        let local_i = i - nm;
+        let local_j = j - nm;
+        if local_i <= local_j {
+            repr_a.get(local_i, local_j)
+        } else {
+            F::zero()
+        }
+    } else if nm + n <= i && i < nm + n + m && nm + n <= j && j < nm + n + m {
+        // Bottom-right block: B
+        let local_i = i - (nm + n);
+        let local_j = j - (nm + n);
+        if local_i <= local_j {
+            repr_b.get(local_i, local_j)
+        } else {
+            F::zero()
+        }
+    } else {
+        F::zero()
+    }
+}
+
+/// Compute the entry [i,j] of the kronecker product of two representations in a lazy manner, i.e. only compute the
+/// desired entry and not the entire matrix.
+fn lazy_kron_prod<F: PseudoField>(arr_a: &Array2<F>, arr_b: &Array2<F>, i: usize, j: usize) -> F {
+    let shape_a = arr_a.shape();
+    let shape_b = arr_b.shape();
+
+    let rows = shape_a[0] * shape_b[0];
+    let cols = shape_a[1] * shape_b[1];
+    assert!(i <= rows && j <= cols, "Index out of bounds ({},{})", i, j);
+
+    let row_a = i / shape_b[0];
+    let col_a = j / shape_b[1];
+    let row_b = i.rem_euclid(shape_b[0]);
+    let col_b = j.rem_euclid(shape_b[1]);
+
+    let mut res = arr_a.get((row_a, col_a)).unwrap().clone();
+    res.mul_assign(arr_b.get((row_b, col_b)).unwrap());
+    res
+}
+
+/// Compute the entry [i,j] of the kronecker sum of two representations in a lazy manner, i.e. only compute the
+/// desired entry and not the entire matrix.
+fn lazy_kron_sum<F: PseudoField, R: Representation<F>>(
+    repr_a: &R,
+    repr_b: &R,
+    i: usize,
+    j: usize,
+) -> F {
+    let n = repr_a.size();
+    let m = repr_b.size();
+    assert!(
+        usize::max(i, j) < n * m,
+        "Index ({},{}) is out of bounds. Size: ({},{})",
+        i,
+        j,
+        n * m,
+        n * m
+    );
+    let r_a = i / m;
+    let r_b = i.rem_euclid(m);
+    let c_a = j / m;
+    let c_b = j.rem_euclid(m);
+
+    let mut result = F::zero();
+
+    // Contribution from A \otimes I_m
+    if r_b == c_b && r_a <= c_a {
+        result.add_assign(&repr_a.get(r_a, c_a));
+    };
+
+    // Contribution from I_n \otimes B
+    if r_a == c_a && r_b <= c_b {
+        result.add_assign(&repr_b.get(r_b, c_b));
+    };
+
+    result
 }

@@ -5,9 +5,10 @@ use std::{
 };
 
 use aph::{
-    formats::{self},
+    formats::{self, dft},
     linalg::fields::{
-        float64::Float64, float64_cf::Float64RoundCF, float64_round::Float64Round, inari_int::Interval, rational::Rational, Down, Near, PseudoField, Up
+        float64::Float64, float64_round::Float64Round, inari_int::Interval, interval_field::IF,
+        rational::Rational, Down, PseudoField, Up,
     },
     representation::{Triangular, TriangularArray},
     Aph,
@@ -15,7 +16,8 @@ use aph::{
 use clap::{Parser, ValueEnum};
 use log::{info, warn};
 use memory_stats::memory_stats;
-
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 pub mod models;
 use models::*;
 
@@ -26,7 +28,7 @@ struct Args {
     #[arg(short, long, conflicts_with = "model")]
     input: Option<std::path::PathBuf>,
     /// Output file, writes a tra file.
-    #[arg(short, long, requires = "file")]
+    #[arg(short, long, requires = "input")]
     output: Option<String>,
     #[arg(value_enum, short, long, default_value_t=NumericField::Rational)]
     numeric_field: NumericField,
@@ -34,28 +36,29 @@ struct Args {
     model: Model,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum NumericField {
     Rational,
     F64,
     F64Up,
     F64Down,
-    CFF64,
-    CFF64Up,
-    CFF64Down,
     Inari,
+    IntF64Sup,
+    IntF64Inf,
 }
 
-fn run(field: NumericField, model: Model) -> io::Result<()> {
+#[allow(unused)]
+fn run(field: NumericField, model: Model) -> (usize, usize, io::Result<()>) {
     match field {
-        NumericField::Rational => choose_model::<Rational>(model),
-        NumericField::F64 => choose_model::<Float64>(model),
-        NumericField::F64Down => choose_model::<Float64Round<Down>>(model),
-        NumericField::F64Up => choose_model::<Float64Round<Up>>(model),
-        NumericField::CFF64 => choose_model::<Float64RoundCF<Near>>(model),
-        NumericField::CFF64Down => choose_model::<Float64RoundCF<Down>>(model),
-        NumericField::CFF64Up => choose_model::<Float64RoundCF<Up>>(model),
-        NumericField::Inari => choose_model::<Interval>(model),
+        NumericField::Rational => choose_model::<Rational>(model, "rational"),
+        NumericField::F64 => choose_model::<Float64>(model, "f64"),
+        NumericField::F64Down => choose_model::<Float64Round<Down>>(model, "f64-down"),
+        NumericField::F64Up => choose_model::<Float64Round<Up>>(model, "f64-up"),
+        NumericField::Inari => choose_model::<Interval<Down>>(model, "inari"),
+        NumericField::IntF64Sup => choose_model::<IF<Float64, Up>>(model, "int-f64-sup"),
+        NumericField::IntF64Inf => choose_model::<IF<Float64, Down>>(model, "int-f64-inf"),
+        _ => (0, 0, Ok(())),
     }
 }
 
@@ -78,9 +81,7 @@ pub fn parse_file_array<F: PseudoField>(path: &Path) -> Aph<F, TriangularArray<F
 }
 
 fn main() {
-    std::env::set_var("RUST_LOG", "info");
     env_logger::init();
-
     let args = Args::parse();
     let (pre_physical_mem, pre_virtual_mem) = if let Some(usage) = memory_stats() {
         (usage.physical_mem, usage.virtual_mem)
@@ -89,25 +90,20 @@ fn main() {
         (0, 0)
     };
     let time_start = Instant::now();
+
     info!("Using [{:?}] as numerical field.", args.numeric_field);
-    match args.input {
-        Some(file) => {
-            let _ = match args.numeric_field {
-                NumericField::Rational => _from_file::<Rational>(file, &args.output),
-                NumericField::F64 => _from_file::<Float64>(file, &args.output),
-                NumericField::F64Down => _from_file::<Float64Round<Down>>(file, &args.output),
-                NumericField::F64Up => _from_file::<Float64Round<Up>>(file, &args.output),
-                NumericField::CFF64 => _from_file::<Float64RoundCF<Near>>(file, &args.output),
-                NumericField::CFF64Down => _from_file::<Float64RoundCF<Down>>(file, &args.output),
-                NumericField::CFF64Up => _from_file::<Float64RoundCF<Up>>(file, &args.output),
-                NumericField::Inari => _from_file::<Interval>(file, &args.output),
-                // _ => Ok(()),
-            };
-        }
-        None => {
-            let _ = run(args.numeric_field, args.model);
-        }
-    }
+
+    let (reductions, size, _result) = match args.input {
+        Some(file) => match args.numeric_field {
+            NumericField::Rational => _from_file::<Rational>(file, args.output),
+            NumericField::F64 => _from_file::<Float64>(file, args.output),
+            NumericField::F64Down => _from_file::<Float64Round<Down>>(file, args.output),
+            NumericField::F64Up => _from_file::<Float64Round<Up>>(file, args.output),
+            NumericField::Inari => _from_file::<Interval<Down>>(file, args.output),
+            _ => (0, 0, Ok(())),
+        },
+        None => run(args.numeric_field, args.model),
+    };
 
     let elapsed = time_start.elapsed();
     let (post_physical_mem, post_virtual_mem) = if let Some(usage) = memory_stats() {
@@ -117,31 +113,56 @@ fn main() {
         (0, 0)
     };
 
-    info!(
-        "Elapsed: {:?}. physical mem used: {:.2} MB. virtual mem used: {:.2} MB",
-        elapsed,
-        (post_physical_mem - pre_physical_mem) as f64 / 1048576.0,
-        (post_virtual_mem - pre_virtual_mem) as f64 / 1048576.0
+    println!(
+        "{}",
+        json!({
+            "model": args.model,
+            "field": args.numeric_field,
+            "memory": ((post_physical_mem - pre_physical_mem) as f64 / 1048576.0,
+            (post_virtual_mem - pre_virtual_mem) as f64 / 1048576.0),
+            "reductions": reductions,
+            "size": size,
+            "elapsed": format!("{:?}", elapsed.as_secs_f64())
+        })
     );
 }
 
-pub fn _from_file<F: PseudoField>(file: PathBuf, output: &Option<String>) -> io::Result<()> {
+pub fn _from_file<F: PseudoField>(
+    file: PathBuf,
+    output: Option<String>,
+) -> (usize, usize, io::Result<()>) {
     let time_start = Instant::now();
     let dist = parse_file_tri::<F>(&file);
     let mut bidi = dist.spa();
-    bidi.reduce();
+    let total_red = bidi.reduce();
     let elapsed = time_start.elapsed();
-    match output {
-        Some(file) => {
-            bidi._export_to_tra(file)?;
-            bidi.to_coxian().export(file)?;
-        }
-        None => {}
-    };
     info!(
         "After the reduction, APH size: {}. Elapsed: {:?}",
         bidi.size(),
-        elapsed
+        elapsed.as_secs_f64()
     );
-    Ok(())
+    let size = bidi.size();
+    match output {
+        Some(file) => (total_red, size, bidi.to_coxian().export(&file)),
+        None => (total_red, size, Ok(())),
+    }
+}
+
+pub fn _from_dft_file<F: PseudoField>(
+    file: PathBuf,
+    _output: Option<String>,
+) -> (usize, io::Result<()>) {
+    let time_start = Instant::now();
+    let ft = dft::FaultTree::<F>::from_file(&file);
+
+    let (aph, total_red) = match ft.nodes.get(&ft.toplevel) {
+        Some(node) => node.to_aph(&ft.nodes),
+        None => panic!(),
+    };
+    let elapsed = time_start.elapsed();
+    info!("Elapsed time: {:?}. Reductions: {}", elapsed, total_red);
+    match _output {
+        None => (total_red, Ok(())),
+        Some(file) => (total_red, aph.to_coxian().export(&file)),
+    }
 }

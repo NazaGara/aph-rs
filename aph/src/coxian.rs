@@ -3,6 +3,8 @@ use std::{
     io::{self, Write},
 };
 
+use log::info;
+
 use crate::linalg::{fields::PseudoField, Vector};
 
 /// A Coxian distribution, is a special type of PH where the generator is denored by $\mathbf{Cx}(\[\lambda_1, p_2\],\[\lambda_1, p_2\],\dots,\lambda_n)$, and
@@ -22,9 +24,9 @@ pub struct Coxian<F: PseudoField> {
 }
 
 impl<F: PseudoField> Coxian<F> {
-    pub fn export(&self, filepath: &str) -> io::Result<()> {
-        let mut tra_file = File::create(format!("{:?}.tra", filepath).replace("\"", ""))?;
-        let mut lab_file = File::create(format!("{:?}.lab", filepath).replace("\"", ""))?;
+    pub fn export(&self, filename: &str) -> io::Result<()> {
+        let mut tra_file = File::create(format!("{:?}.tra", filename).replace("\"", ""))?;
+        let mut lab_file = File::create(format!("{:?}.lab", filename).replace("\"", ""))?;
 
         let size = self.lambdas.len();
 
@@ -35,12 +37,13 @@ impl<F: PseudoField> Coxian<F> {
         // Write transitions, i.e. each state to the next and to the last one.
         for i in 0..size {
             let mut l = self.lambdas[i].clone();
-            let f = self.factors[i].clone();
             l.neg_assign();
-            let to_next = l.clone() * f; // to the next state
+            let to_next = l.clone() * self.factors[i].clone(); // to the next state
             l.sub_assign(&to_next); // to the final state
 
-            writeln!(tra_file, "{} {} {}", i, i + 1, to_next.to_string())?;
+            if !to_next.is_zero() {
+                writeln!(tra_file, "{} {} {}", i, i + 1, to_next.to_string())?;
+            }
             if i + 2 != size + 1 {
                 writeln!(tra_file, "{} {} {}", i, size, l.to_string())?;
             }
@@ -55,6 +58,11 @@ impl<F: PseudoField> Coxian<F> {
         writeln!(lab_file, "#END")?;
         writeln!(lab_file, "0 init")?;
         writeln!(lab_file, "{} done", size)?;
+
+        info!(
+            "Coxian Model writed to file: '{}', last state with label: 'done'.",
+            filename
+        );
 
         Ok(())
     }

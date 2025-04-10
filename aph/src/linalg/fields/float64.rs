@@ -9,15 +9,15 @@
 //!
 
 use std::{
-    fmt::Display,
+    fmt::{Debug, Display},
     ops::{Add, Div, Mul, Sub},
 };
 
 use super::{
-    multiple_of, round_to_rug_round, Almost, ContFraction, FromCF, FromRational, Round, SparseField, ToRational
+    round_to_rug_round, Almost, ContFraction, FromCF, FromRational, Round, SparseField, ToRational,
 };
 use num_rational::Ratio;
-use num_traits::{One, Zero};
+use num_traits::One;
 use rug::{
     float::OrdFloat,
     ops::{
@@ -30,8 +30,14 @@ use rug::{
 ///
 /// Currently this is based on [`rug::Float`] but in the future we may implement this
 /// type using architecture specific features.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Float64(rug::float::OrdFloat);
+
+impl Debug for Float64 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.as_float())
+    }
+}
 
 impl Float64 {
     pub fn is_nan(&self) -> bool {
@@ -42,24 +48,35 @@ impl Float64 {
     }
 }
 
+impl From<rug::Float> for Float64 {
+    fn from(value: rug::Float) -> Self {
+        Self(OrdFloat::from(value))
+    }
+}
+
 impl Almost for Float64 {
-    fn is_almost_zero(&self) -> bool {
+    fn almost_one(&self) -> bool {
         let mut self_abs = self.clone();
         self_abs.abs_assign();
-        let epsilon = Self::from_rational(&format!("{:?}", f64::EPSILON), "1");
-        self_abs.le(&epsilon)
+        self_abs.sub_assign(&Self::one(), Round::Nearest);
+        self_abs.le(&Self::epsilon())
+    }
+
+    fn almost_zero(&self) -> bool {
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+        self_abs.le(&Self::epsilon())
     }
 
     fn cmp_eq(&self, other: &Self) -> bool {
-        let abstol = Self::from_rational("1", "10000000");
-        let epsi = Self::from_rational("1", "10000");
+        let abstol = Self::abstol();
+        let epsilon = Self::reltol();
 
-        if self.eq(&other) {
+        if self.eq(other) {
             return true;
         }
         let mut diff = self.clone().sub(other.clone());
         diff.abs_assign();
-
         if diff.le(&abstol) {
             return true;
         }
@@ -74,15 +91,9 @@ impl Almost for Float64 {
         } else {
             other_abs
         })
-        .mul(epsi.clone());
+        .mul(epsilon);
 
         diff.le(&reltol)
-    }
-
-    fn is_almost_zero_and_correct(&mut self) {
-        if self.is_almost_zero() {
-            self.set_zero();
-        };
     }
 }
 
@@ -90,7 +101,7 @@ impl Display for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
         val.set_prec_round_64(53, rug::float::Round::Nearest);
-        write!(f, "{:.8}", val)
+        write!(f, "{:.3}", val)
     }
 }
 
@@ -99,16 +110,6 @@ impl FromRational for Float64 {
         let num = Float::parse(numerator).unwrap().complete(53);
         let den = Float::parse(denominator).unwrap().complete(53);
         Self(rug::Float::with_val(53, num / den).into())
-    }
-
-    fn from_rational_modular(numerator: &str, denominator: &str, moduler: f64) -> Self {
-        let num = Float::parse(numerator).unwrap().complete(53);
-        let den = Float::parse(denominator).unwrap().complete(53);
-        let moduler = Float::with_val(53, moduler);
-        let new_num = multiple_of(&num, &moduler, Round::Down);
-        let new_den = multiple_of(&den, &moduler, Round::Down);
-
-        Self(rug::Float::with_val(53, new_num / new_den).into())
     }
 }
 
@@ -123,7 +124,7 @@ impl ToRational for Float64 {
 impl FromCF for Float64 {
     fn from_cont_fraction(cf: &mut ContFraction) -> Self {
         if cf.values.len() <= 1 {
-            return Float64::from(cf.values[0].to_i128_wrapping() as f64);
+            Float64::from(cf.values[0].to_i128_wrapping() as f64)
         } else {
             let val = Float64::from(cf.values.remove(0).to_i128_wrapping() as f64);
             let mut rgt = Float64::one();
@@ -133,7 +134,7 @@ impl FromCF for Float64 {
                 }),
                 Round::Nearest,
             );
-            return val + rgt;
+            val + rgt
         }
     }
 }
@@ -210,7 +211,7 @@ impl SparseField for Float64 {
             .div_assign_round(rhs.0.as_float(), round_to_rug_round(round));
     }
 
-    fn inv(&mut self) {
+    fn inv_assign(&mut self) {
         *self = Self(rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.0.clone()))).into())
     }
 
@@ -250,6 +251,15 @@ impl Sub for Float64 {
         neg_rhs.neg_assign();
         Self(OrdFloat::from(
             self.0.as_float().add(neg_rhs.0.as_float()).complete(53),
+        ))
+    }
+}
+
+impl Div for Float64 {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self::Output {
+        Self(OrdFloat::from(
+            self.0.as_float().div(rhs.0.as_float()).complete(53),
         ))
     }
 }

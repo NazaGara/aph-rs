@@ -19,11 +19,12 @@ use super::{
     SparseField, ToRational,
 };
 use num_rational::Ratio;
-use num_traits::{One, Zero};
+use num_traits::One;
 use rug::{
     float::OrdFloat,
     ops::{
-        AddAssignRound, CompleteRound, DivAssignRound, MulAssignRound, NegAssign, Pow, SubAssignRound
+        AddAssignRound, CompleteRound, DivAssignRound, MulAssignRound, NegAssign, Pow,
+        SubAssignRound,
     },
     Float,
 };
@@ -45,19 +46,25 @@ impl<R: Rounding> Debug for Float64Round<R> {
 }
 
 impl<R: Rounding> Almost for Float64Round<R> {
-    fn is_almost_zero(&self) -> bool {
+    fn almost_one(&self) -> bool {
         let mut self_abs = self.clone();
         self_abs.abs_assign();
-        let epsilon = Self::from_rational(&format!("{:?}", f64::EPSILON), "2");
-        self_abs.le(&epsilon)
+        self_abs.sub_assign(&Self::one(), Round::Nearest);
+        self_abs.le(&Self::epsilon())
+    }
+
+    fn almost_zero(&self) -> bool {
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+        self_abs.le(&Self::epsilon())
     }
 
     /// -- listing 3 from https://www.accu.org/journals/overload/31/173/floyd/
     fn cmp_eq(&self, other: &Self) -> bool {
-        let abstol = Self::from_rational("1", "10000000");
-        let epsi = Self::from_rational("1", "10000");
+        let abstol = Self::abstol();
+        let epsilon = Self::reltol();
 
-        if self.eq(&other) {
+        if self.eq(other) {
             return true;
         }
         let mut diff = self.clone().sub(other.clone());
@@ -76,15 +83,9 @@ impl<R: Rounding> Almost for Float64Round<R> {
         } else {
             other_abs
         })
-        .mul(epsi.clone());
+        .mul(epsilon);
 
         diff.le(&reltol)
-    }
-
-    fn is_almost_zero_and_correct(&mut self) {
-        if self.is_almost_zero() {
-            self.set_zero();
-        };
     }
 }
 
@@ -92,14 +93,14 @@ impl<R: Rounding> Display for Float64Round<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.value.as_float().clone();
         val.set_prec_round_64(53, round_to_rug_round(R::rounding()));
-        write!(f, "{:.8}", val)
+        write!(f, "{:.25}", val)
     }
 }
 
 impl<R: Rounding> FromCF for Float64Round<R> {
     fn from_cont_fraction(cf: &mut ContFraction) -> Self {
         if cf.values.len() <= 1 {
-            return Float64Round::from(cf.values[0].to_i128_wrapping() as f64);
+            Float64Round::from(cf.values[0].to_i128_wrapping() as f64)
         } else {
             let val = Float64Round::from(cf.values.remove(0).to_i128_wrapping() as f64);
             let mut rgt = Float64Round::one();
@@ -109,70 +110,44 @@ impl<R: Rounding> FromCF for Float64Round<R> {
                 }),
                 R::rounding(),
             );
-            return val + rgt;
+            val + rgt
         }
     }
 }
 
 impl<R: Rounding> FromRational for Float64Round<R> {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
-        let (num, _) = Float::parse(numerator)
-            .unwrap()
-            .complete_round(53, round_to_rug_round(R::rounding()));
-        let (den, _) = Float::parse(denominator)
-            .unwrap()
-            .complete_round(53, round_to_rug_round(R::rounding()));
-        Self {
-            value: rug::Float::with_val(53, num / den).into(),
-            round: PhantomData,
-        }
-    }
-    fn from_rational_modular(numerator: &str, denominator: &str, _moduler: f64) -> Self {
         let num = Float::parse(numerator).unwrap().complete(53);
         let den = Float::parse(denominator).unwrap().complete(53);
         let moduler = Float::with_val(53, 1e8);
-        match R::rounding() {
+        let value = match R::rounding() {
             Round::Up => {
                 let new_num = multiple_of(&num, &moduler, Round::Up);
                 let new_den = multiple_of(&den, &moduler, Round::Down);
 
-                let lala = Float::ceil(new_num.clone().log2() - new_den.clone().log2());
-                if lala.is_infinite() || lala.is_nan(){
-                    Self::from_rational(numerator, denominator)
-                }else{
-                    let lala = Float::with_val(53, 2.0).pow(lala);
-                    Self{
-                        value: lala.into(),
-                        round : PhantomData
-                    }
+                let value = Float::ceil(new_num.clone().log2() - new_den.clone().log2());
+                if value.is_infinite() || value.is_nan() {
+                    let num = Float::parse(numerator).unwrap().complete(53);
+                    let den = Float::parse(denominator).unwrap().complete(53);
+                    rug::Float::with_val(53, num / den).into()
+                } else {
+                    Float::with_val(53, 2.0).pow(value).into()
                 }
-                // Self {
-                //     value: rug::Float::with_val(53, new_num / new_den).into(),
-                //     round: PhantomData,
-                // }
             }
             Round::Down | Round::Zero => {
                 let new_num = multiple_of(&num, &moduler, Round::Down);
                 let new_den = multiple_of(&den, &moduler, Round::Up);
-                Self {
-                    value: rug::Float::with_val(53, new_num / new_den).into(),
-                    round: PhantomData,
-                }
-                // let new_num = multiple_of(&num, &moduler, Round::Up);
-                // let new_den = multiple_of(&den, &moduler, Round::Down);
-
-                // let lala = Float::floor(new_num.clone().log2() - new_den.clone().log2());
-                // if lala.is_infinite() || lala.is_nan(){
-                //     Self::from_rational(numerator, denominator)
-                // }else{
-                //     let lala = Float::with_val(53, 2.0).pow(lala);
-                //     Self{
-                //         value: lala.into(),
-                //         round : PhantomData
-                //     }
-                // }
+                rug::Float::with_val(53, new_num / new_den).into()
             }
-            Round::Nearest => Self::from_rational(numerator, denominator),
+            Round::Nearest => {
+                let num = Float::parse(numerator).unwrap().complete(53);
+                let den = Float::parse(denominator).unwrap().complete(53);
+                rug::Float::with_val(53, num / den).into()
+            }
+        };
+        Self {
+            value,
+            round: PhantomData,
         }
     }
 }
@@ -233,6 +208,22 @@ impl<R: Rounding> Mul for Float64Round<R> {
                 .value
                 .as_float()
                 .mul(rhs.value.as_float())
+                .complete_round(53, round_to_rug_round(R::rounding()))
+                .0
+                .into(),
+            round: PhantomData,
+        }
+    }
+}
+
+impl<R: Rounding> Div for Float64Round<R> {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self::Output {
+        Self {
+            value: self
+                .value
+                .as_float()
+                .div(rhs.value.as_float())
                 .complete_round(53, round_to_rug_round(R::rounding()))
                 .0
                 .into(),
@@ -310,7 +301,7 @@ impl<R: Rounding> SparseField for Float64Round<R> {
             .div_assign_round(rhs.value.as_float(), round_to_rug_round(R::rounding()));
     }
 
-    fn inv(&mut self) {
+    fn inv_assign(&mut self) {
         *self = Self {
             value: rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.value.clone())))
                 .into(),
@@ -323,7 +314,6 @@ impl<R: Rounding> SparseField for Float64Round<R> {
         val.set_prec_round(53, round_to_rug_round(R::rounding()));
         format!("{:?}", val)
     }
-
 }
 
 impl<R: Rounding> Sub for Float64Round<R> {

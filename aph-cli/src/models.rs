@@ -1,3 +1,5 @@
+use std::fmt::Display;
+#[allow(unused, dead_code)]
 use std::io;
 
 use aph::{
@@ -7,32 +9,65 @@ use aph::{
     Aph,
 };
 use clap::ValueEnum;
-use log::info;
+use log::warn;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Model {
     Ex37,
     Hacking,
     HackingSmall,
+    HackingLarge,
     CITD,
     APPF,
     StealExam,
     Stuxnet,
 }
 
-pub fn choose_model<F: PseudoField>(model: Model) -> io::Result<()> {
-    match model {
+impl Display for Model {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Model::Ex37 => Ok(write!(f, "ex37")?),
+            Model::Hacking => Ok(write!(f, "hacking")?),
+            Model::HackingSmall => Ok(write!(f, "hacking-small")?),
+            Model::HackingLarge => Ok(write!(f, "hacking-large")?),
+            Model::CITD => Ok(write!(f, "citd")?),
+            Model::APPF => Ok(write!(f, "appf")?),
+            Model::StealExam => Ok(write!(f, "steal-exam")?),
+            Model::Stuxnet => Ok(write!(f, "stuxnet")?),
+        }
+    }
+}
+
+pub fn choose_model<F: PseudoField>(model: Model, suffix: &str) -> (usize, usize, io::Result<()>) {
+    let (reductions, ph) = match model {
         Model::Ex37 => _ex3_7::<F>(),
         Model::Hacking => _hacking::<F>(),
         Model::HackingSmall => _hacking_small::<F>(),
+        Model::HackingLarge => _hacking_large::<F>(),
         Model::CITD => _citd::<F>(),
         Model::APPF => _appf::<F>(),
         Model::StealExam => _steal_exam::<F>(),
         Model::Stuxnet => _stuxnet::<F>(),
+    };
+    let export_res = if ["inari", "int-f64-inf", "int-f64-sup"].contains(&suffix) {
+        ph.export_to_ma(&format!("models/{}_{}", model, suffix))
+    } else {
+        ph.to_coxian()
+            .export(&format!("models/{}_{}", model, suffix))
+    };
+
+    match export_res {
+        Ok(()) => (reductions, ph.size(), Ok(())),
+        Err(e) => {
+            warn!("Something went wrong when exporting the aph: {}", e);
+            (reductions, ph.size(), Err(e))
+        }
     }
 }
 
-pub fn _ex3_7<F: PseudoField>() -> io::Result<()> {
+pub fn _ex3_7<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut diag = Bidiagonal::new(7);
     diag.set(0, F::from_rational("-1", "1"));
     diag.set(1, F::from_rational("-2", "1"));
@@ -52,17 +87,39 @@ pub fn _ex3_7<F: PseudoField>() -> io::Result<()> {
     ]);
     let mut ph = Aph::new(ini, diag);
     let total_red = ph.reduce();
-    info!("Number of Reductions: {:?}", total_red);
-    ph.to_coxian().export("ex3_7")?;
-    Ok(())
+    (total_red, ph)
 }
 
-pub fn _hacking_small<F: PseudoField>() -> io::Result<()> {
+pub fn _hacking_small<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut total_red = 0;
     let hack = Aph::<F, Bidiagonal<F>>::_new_erl(3, "-4", "1");
     let keylogger = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-3", "1");
-    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "2");
+    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "1");
     let crack_firewall = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-3", "1");
+    let penetrate_repo = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
+
+    let mut acq_pass = min_ph(&keylogger, &guessing);
+    total_red += acq_pass.reduce();
+
+    let mut mailbox = min_ph(&hack, &acq_pass);
+    total_red += mailbox.reduce();
+
+    let mut repo = con_ph(&crack_firewall, &penetrate_repo);
+    total_red += repo.reduce();
+
+    let mut hacking = min_ph(&mailbox, &repo);
+    total_red += hacking.reduce();
+
+    (total_red, hacking)
+}
+
+pub fn _hacking<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
+    let mut total_red = 0;
+    let hack = Aph::<F, Bidiagonal<F>>::_new_erl(6, "-4", "1");
+    let keylogger = Aph::<F, Bidiagonal<F>>::_new_erl(4, "-3", "1");
+    let crack_firewall = Aph::<F, Bidiagonal<F>>::_new_erl(4, "-3", "1");
+
+    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "2");
     let penetrate_repo = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
 
     let mut acq_pass = min_ph(&keylogger, &guessing);
@@ -74,15 +131,35 @@ pub fn _hacking_small<F: PseudoField>() -> io::Result<()> {
     total_red += repo.reduce();
 
     let mut hacking = min_ph(&mailbox, &repo);
-
     total_red += hacking.reduce();
 
-    info!("Number of Reductions: {:?}", total_red);
-    hacking.to_coxian().export("hacking_small")?;
-    Ok(())
+    (total_red, hacking)
 }
 
-pub fn _citd<F: PseudoField>() -> io::Result<()> {
+pub fn _hacking_large<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
+    let mut total_red = 0;
+    let hack = Aph::<F, Bidiagonal<F>>::_new_erl(25, "-4", "1");
+    let keylogger = Aph::<F, Bidiagonal<F>>::_new_erl(15, "-3", "1");
+    let crack_firewall = Aph::<F, Bidiagonal<F>>::_new_erl(17, "-3", "1");
+
+    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "2");
+    let penetrate_repo = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
+
+    let mut acq_pass = min_ph(&keylogger, &guessing);
+    total_red += acq_pass.reduce();
+
+    let mut mailbox = min_ph(&hack, &acq_pass);
+    total_red += mailbox.reduce();
+    let mut repo = con_ph(&crack_firewall, &penetrate_repo);
+    total_red += repo.reduce();
+
+    let mut hacking = min_ph(&mailbox, &repo);
+    total_red += hacking.reduce();
+
+    (total_red, hacking)
+}
+
+pub fn _citd<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut total_red = 0;
     let find_lan_access_port = Aph::<F, Bidiagonal<F>>::_new_erl(5, "-1", "1");
     let spoof_mac_address = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-1", "2");
@@ -104,7 +181,7 @@ pub fn _citd<F: PseudoField>() -> io::Result<()> {
     let exploit_software_vulnerability = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "1");
     let run_malicous_script = Aph::<F, Bidiagonal<F>>::_new_erl(10, "-1", "2");
 
-    let mut compromise_iot_device = con_phs(&vec![
+    let mut compromise_iot_device = con_phs(&[
         &access_home_network,
         &exploit_software_vulnerability,
         &run_malicous_script,
@@ -113,37 +190,10 @@ pub fn _citd<F: PseudoField>() -> io::Result<()> {
 
     total_red += compromise_iot_device.reduce();
 
-    info!("Number of Reductions: {:?}", total_red);
-    compromise_iot_device.to_coxian().export("citd")?;
-    // compromise_iot_device._export_to_tra("citd_bidi_red_)?;
-    Ok(())
+    (total_red, compromise_iot_device)
 }
 
-pub fn _hacking<F: PseudoField>() -> io::Result<()> {
-    let mut total_red = 0;
-    let hack = Aph::<F, Bidiagonal<F>>::_new_erl(6, "-4", "1");
-    let keylogger = Aph::<F, Bidiagonal<F>>::_new_erl(4, "-3", "1");
-    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "2");
-    let crack_firewall = Aph::<F, Bidiagonal<F>>::_new_erl(4, "-3", "1");
-    let penetrate_repo = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
-
-    let mut acq_pass = min_ph(&keylogger, &guessing);
-    total_red += acq_pass.reduce();
-
-    let mut mailbox = min_ph(&hack, &acq_pass);
-    total_red += mailbox.reduce();
-    let mut repo = con_ph(&crack_firewall, &penetrate_repo);
-    total_red += repo.reduce();
-
-    let mut hacking = min_ph(&mailbox, &repo);
-    total_red += hacking.reduce();
-
-    info!("Number of Reductions: {:?}", total_red);
-    hacking.to_coxian().export("hacking")?;
-    Ok(())
-}
-
-pub fn _appf<F: PseudoField>() -> io::Result<()> {
+pub fn _appf<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut total_red = 0;
     let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-3", "5");
     let dictionary = Aph::<F, Bidiagonal<F>>::_new_exp("-3", "8");
@@ -160,7 +210,7 @@ pub fn _appf<F: PseudoField>() -> io::Result<()> {
     let mut physical = max_ph(&physical_reconnaissance, &keylogger_local_installation);
     total_red += physical.reduce();
 
-    let mut remote = max_phs(&vec![
+    let mut remote = max_phs(&[
         &generic_reconnaissance,
         &payload_crafting,
         &email_file_execution,
@@ -184,21 +234,21 @@ pub fn _appf<F: PseudoField>() -> io::Result<()> {
     );
     total_red += social_engineering.reduce();
 
+    // Almost all reductions happen here
     let mut password_attack = min_ph(&social_engineering, &key_logger);
     total_red += password_attack.reduce();
 
-    let mut cracking_alternatives = min_phs(&vec![&guessing, &dictionary, &bruteforce]).unwrap();
+    let mut cracking_alternatives = min_phs(&[&guessing, &dictionary, &bruteforce]).unwrap();
     total_red += cracking_alternatives.reduce();
 
     let mut password_attack_success = min_ph(&cracking_alternatives, &password_attack);
+
     total_red += password_attack_success.reduce();
 
-    info!("Number of Reductions: {:?}", total_red);
-    password_attack_success.to_coxian().export("appf")?;
-    Ok(())
+    (total_red, password_attack_success)
 }
 
-pub fn _steal_exam<F: PseudoField>() -> io::Result<()> {
+pub fn _steal_exam<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut total_red = 0;
     let prep_bribe = Aph::<F, Bidiagonal<F>>::_new_erl(3, "-4", "1");
 
@@ -247,18 +297,17 @@ pub fn _steal_exam<F: PseudoField>() -> io::Result<()> {
     let mut steal_exam = min_ph(&steal1, &hacking);
     total_red += steal_exam.reduce();
 
-    info!("Number of Reductions: {:?}", total_red);
-    steal_exam.to_coxian().export("steal_exam")?;
-    Ok(())
+    (total_red, steal_exam)
 }
 
-pub fn _stuxnet<F: PseudoField>() -> io::Result<()> {
+pub fn _stuxnet<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
     let mut total_red = 0;
     let injection_via_usb = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-1", "1");
 
     let p2p_communication = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "1");
     let cnc_communication = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "1");
     let mut main_module_exec = min_ph(&p2p_communication, &cnc_communication);
+
     total_red += main_module_exec.reduce();
 
     let removable_media = Aph::<F, Bidiagonal<F>>::_new_erl(2, "1", "1");
@@ -266,7 +315,7 @@ pub fn _stuxnet<F: PseudoField>() -> io::Result<()> {
     let network_shares = Aph::<F, Bidiagonal<F>>::_new_exp("-12", "1");
     let print_server_vuln = Aph::<F, Bidiagonal<F>>::_new_exp("-8", "1");
     let service_server_rpc_vuln = Aph::<F, Bidiagonal<F>>::_new_exp("-24", "1");
-    let mut lan = min_phs(&vec![
+    let mut lan = min_phs(&[
         &network_shares,
         &print_server_vuln,
         &service_server_rpc_vuln,
@@ -277,18 +326,17 @@ pub fn _stuxnet<F: PseudoField>() -> io::Result<()> {
 
     let user_opens_win_cc_file_projects = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "1");
 
-    let mut propagation = min_phs(&vec![
-        &removable_media,
-        &lan,
-        &user_opens_win_cc_file_projects,
-    ])
-    .unwrap();
+    let mut propagation =
+        min_phs(&[&removable_media, &lan, &user_opens_win_cc_file_projects]).unwrap();
 
     total_red += propagation.reduce();
 
     let mut self_installation = con_ph(&main_module_exec, &propagation);
+
     total_red += self_installation.reduce();
+
     let mut compromise_corporate_network = max_ph(&injection_via_usb, &self_installation);
+
     total_red += compromise_corporate_network.reduce();
 
     let infection_of_control_pc = Aph::<F, Bidiagonal<F>>::_new_erl(3, "-2", "10");
@@ -299,77 +347,80 @@ pub fn _stuxnet<F: PseudoField>() -> io::Result<()> {
     let cascade_centrifuges = Aph::<F, Bidiagonal<F>>::_new_erl(20, "-20", "1");
 
     let mut sys_300 = con_ph(&collect_data, &plc_sends_false_data);
+
     total_red += sys_300.reduce();
+
     let mut sys_400 = con_ph(&intercept_in_out_signals, &modify_out_signals);
+
     total_red += sys_400.reduce();
+
     let mut run_modified_code_on_plc = min_ph(&sys_300, &sys_400);
+
     total_red += run_modified_code_on_plc.reduce();
+
     let mut scada_system_compromised = con_ph(&infection_of_control_pc, &run_modified_code_on_plc);
+
     total_red += scada_system_compromised.reduce();
+
     let mut attack_industrial_system = con_ph(&scada_system_compromised, &cascade_centrifuges);
+
     total_red += attack_industrial_system.reduce();
 
     let mut stuxnet = con_ph(&compromise_corporate_network, &attack_industrial_system);
+
     total_red += stuxnet.reduce();
-    info!("Number of Reductions: {:?}", total_red);
-    stuxnet.to_coxian().export("stuxnet")?;
-    Ok(())
+
+    (total_red, stuxnet)
 }
 
-// pub fn _vot3of6<F: PseudoField>() -> io::Result<()> {
-//     let _b1 = Aph::<F, Bidiagonal<F>>::_new_exp("-5", "10");
-//     let _b2 = Aph::<F, Bidiagonal<F>>::_new_exp("-77", "10");
-//     let _b3 = Aph::<F, Bidiagonal<F>>::_new_erl(4, "-3", "1");
-//     let _b4 = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-4", "10");
-//     let _b5 = Aph::<F, Bidiagonal<F>>::_new_erl(2, "-1", "20");
-//     let _b6 = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "10");
-//     // let mut b1_b2_b3 = max_phs(&vec![&_b1, &_b2, &_b3]).unwrap();
-//     b1_b2_b3.reduce();
-//     // let mut b1_b2_b4 = max_phs(&vec![&_b1, &_b2, &_b4]).unwrap();
-//     b1_b2_b4.reduce();
-//     // let mut b1_b2_b5 = max_phs(&vec![&_b1, &_b2, &_b5]).unwrap();
-//     b1_b2_b5.reduce();
-//     // let mut b1_b2_b6 = max_phs(&vec![&_b1, &_b2, &_b6]).unwrap();
-//     b1_b2_b6.reduce();
-//     // let mut b1_b3_b4 = max_phs(&vec![&_b1, &_b3, &_b4]).unwrap();
-//     b1_b3_b4.reduce();
-//     // let mut b1_b3_b5 = max_phs(&vec![&_b1, &_b3, &_b5]).unwrap();
-//     b1_b3_b5.reduce();
-//     // let mut b1_b3_b6 = max_phs(&vec![&_b1, &_b3, &_b6]).unwrap();
-//     b1_b3_b6.reduce();
-//     // let mut b1_b4_b5 = max_phs(&vec![&_b1, &_b4, &_b5]).unwrap();
-//     b1_b4_b5.reduce();
-//     // let mut b1_b4_b6 = max_phs(&vec![&_b1, &_b4, &_b6]).unwrap();
-//     b1_b4_b6.reduce();
-//     // let mut b1_b5_b6 = max_phs(&vec![&_b1, &_b5, &_b6]).unwrap();
-//     b1_b5_b6.reduce();
-//     // let mut b2_b3_b4 = max_phs(&vec![&_b2, &_b3, &_b4]).unwrap();
-//     b2_b3_b4.reduce();
-//     // let mut b2_b3_b5 = max_phs(&vec![&_b2, &_b3, &_b5]).unwrap();
-//     b2_b3_b5.reduce();
-//     // let mut b2_b3_b6 = max_phs(&vec![&_b2, &_b3, &_b6]).unwrap();
-//     b2_b3_b6.reduce();
-//     // let mut b2_b4_b5 = max_phs(&vec![&_b2, &_b4, &_b5]).unwrap();
-//     b2_b4_b5.reduce();
-//     // let mut b2_b4_b6 = max_phs(&vec![&_b2, &_b4, &_b6]).unwrap();
-//     b2_b4_b6.reduce();
-//     // let mut b2_b5_b6 = max_phs(&vec![&_b2, &_b5, &_b6]).unwrap();
-//     b2_b5_b6.reduce();
-//     let mut b3_b4_b5 = max_phs(&vec![&_b3, &_b4, &_b5]).unwrap();
-//     // b3_b4_b5.reduce();
-//     let mut b3_b4_b6 = max_phs(&vec![&_b3, &_b4, &_b6]).unwrap();
-//     // b3_b4_b6.reduce();
-//     // let mut b3_b5_b6 = max_phs(&vec![&_b3, &_b5, &_b6]).unwrap();
-//     b3_b5_b6.reduce();
-//     // let mut b4_b5_b6 = max_phs(&vec![&_b4, &_b5, &_b6]).unwrap();
-//     b4_b5_b6.reduce();
-//     let ands = vec![
-//         // &b1_b2_b3, &b1_b2_b4, &b1_b2_b5, &b1_b2_b6, &b1_b3_b4, &b1_b3_b5, &b1_b3_b6, &b1_b4_b5,
-//         // &b1_b4_b6, &b1_b5_b6, &b2_b3_b4, &b2_b3_b5, &b2_b3_b6, &b2_b4_b5, &b2_b4_b6, &b2_b5_b6,
-//         &b3_b4_b5, &b3_b4_b6, //, &b3_b5_b6, &b4_b5_b6,
-//     ]
-//     let mut _top = min_phs(&ands).unwrap();
-//     // _top.reduce();
-//     _top.to_coxian().export("vot3of6")?;
-//     Ok(())
-// }
+pub fn _steal_exam_large<F: PseudoField>() -> (usize, Aph<F, Bidiagonal<F>>) {
+    let mut total_red = 0;
+    let prep_bribe = Aph::<F, Bidiagonal<F>>::_new_erl(31, "-4", "1");
+
+    let prep_threa = Aph::<F, Bidiagonal<F>>::_new_erl(22, "-3", "1");
+    let prepare = min_ph(&prep_bribe, &prep_threa);
+
+    let approach = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
+    let mut social_int = con_ph(&prepare, &approach);
+
+    total_red += social_int.reduce();
+
+    let hack = Aph::<F, Bidiagonal<F>>::_new_erl(16, "-4", "1");
+    let keylogger = Aph::<F, Bidiagonal<F>>::_new_erl(24, "-3", "1");
+    let guessing = Aph::<F, Bidiagonal<F>>::_new_exp("-1", "2");
+    let crack_firewall = Aph::<F, Bidiagonal<F>>::_new_erl(41, "-3", "1");
+    let penetrate_repo = Aph::<F, Bidiagonal<F>>::_new_exp("-4", "1");
+
+    let mut acq_pass = min_ph(&keylogger, &guessing);
+    total_red += acq_pass.reduce();
+
+    let mut mailbox = min_ph(&hack, &acq_pass);
+    let mut repo = con_ph(&crack_firewall, &penetrate_repo);
+
+    total_red += mailbox.reduce();
+    total_red += repo.reduce();
+
+    let mut hacking = min_ph(&mailbox, &repo);
+    total_red += hacking.reduce();
+
+    let loc_office = Aph::<F, Bidiagonal<F>>::_new_exp("-10", "1");
+    let steal_key = Aph::<F, Bidiagonal<F>>::_new_erl(41, "-6", "1");
+
+    let break_into_ofi = Aph::<F, Bidiagonal<F>>::_new_erl(24, "-2", "1");
+    let find_prints = Aph::<F, Bidiagonal<F>>::_new_exp("-24", "1");
+
+    let mut get_access = min_ph(&steal_key, &break_into_ofi);
+    total_red += get_access.reduce();
+
+    let steal_copy1 = con_ph(&loc_office, &get_access);
+    let mut steal_copy = con_ph(&steal_copy1, &find_prints);
+
+    total_red += steal_copy.reduce();
+    let mut steal1 = min_ph(&social_int, &steal_copy);
+    total_red += steal1.reduce();
+
+    let mut steal_exam = min_ph(&steal1, &hacking);
+    total_red += steal_exam.reduce();
+
+    (total_red, steal_exam)
+}

@@ -2,6 +2,7 @@
 
 use std::fmt::Display;
 
+use itertools::Itertools;
 use ndarray::{Array, Array1};
 
 // use crate::representation::Triangular;
@@ -53,10 +54,50 @@ impl<F: PseudoField> Vector<F> {
         self.elements.iter().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn sum(&self) -> F {
+        let mut accum = F::zero();
+        let _ = self
+            .elements
+            .iter()
+            .map(|e| accum.add_assign(e))
+            .collect_vec();
+        accum
+    }
+
     pub fn zeros(size: usize) -> Self {
         Self {
             elements: vec![F::zero(); size].into(),
         }
+    }
+
+    pub fn scale(&self, bias: f64) -> Self {
+        let mut sum_scaled_probs = F::zero();
+
+        let scaled_vector = self
+            .elements
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let mut prob = F::from_rational(&format!("{}", i as f64 * bias), "1"); // now is just the bias
+                prob.add_assign(e); // Now is the actual value.
+                let prob = if prob.lt(&F::zero()) { F::zero() } else { prob }; // Check that is not negative
+                sum_scaled_probs.add_assign(&prob);
+                prob
+            })
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|sp| {
+                let mut e = sp.clone();
+                e.div_assign(&sum_scaled_probs);
+                e
+            })
+            .collect_vec();
+
+        scaled_vector.into()
     }
 
     pub fn unit(size: usize) -> Self {
@@ -84,9 +125,11 @@ impl<F: PseudoField> Vector<F> {
             "Vectors must have the same dimension."
         );
         for (lhs, rhs) in self.elements.iter().zip(other.elements.iter()) {
-            let mut product = lhs.clone();
-            product.mul_assign(rhs);
-            result.add_assign(&product);
+            if !lhs.is_zero() {
+                let mut product = lhs.clone();
+                product.mul_assign(rhs);
+                result.add_assign(&product);
+            }
         }
         result
     }
@@ -126,7 +169,6 @@ impl<F: PseudoField> Vector<F> {
         let _ = elems.pop();
         Vector::from(elems)
     }
-
 }
 
 impl<F: PseudoField> std::ops::Index<usize> for Vector<F> {
@@ -163,28 +205,13 @@ impl<F: PseudoField> From<Vector<F>> for Array1<F> {
     }
 }
 
-// pub fn lu_solve<F: PseudoField> (upper: Triangular<F>, b: Vector<F>) -> Vector<F>{
-//     let n = upper.size;
-//     let mut x = Vector::zeros(n);
-//     for i in (0..n).rev() {
-//         // let sum = (i+1..n).map(|j| upper.get(i, j) * x[j]).sum::<F>();
-//         let mut sum = F::zero();
-//         for j in (i+1)..n {
-//             sum.add_assign(&(upper.get(i, j) * x[j].clone()));
-//         }
-//         let idk = b[i];
-//         // x[i] = (b[i] - sum) / upper.get(i, j);
-//     }   
-//     x
-// }
-
 /// Given 1D arrays (Vectors) $\mathbf{A}$ and $\mathbf{B}$ it computes the
 /// $\mathbf{A} \otimes \mathbf{B}$ or $\mathbf{A} \oplus \mathbf{B}$
 /// depending on the passed clausure. Takes no assumption over the ['neutral'] parameter.
-pub fn boxed_kronecker_op<F: PseudoField, T: Fn(&mut F, &F) -> ()>(
-    matrix_a: &Box<[F]>,
+pub fn boxed_kronecker_op<F: PseudoField, T: Fn(&mut F, &F)>(
+    matrix_a: &[F],
     size_a: usize,
-    matrix_b: &Box<[F]>,
+    matrix_b: &[F],
     size_b: usize,
     op: T,
     neutral: F,
