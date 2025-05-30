@@ -4,12 +4,12 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
-use super::{Almost, ContFraction, FromCF, FromRational, PseudoField, Rounding, ToRational};
+use super::{Almost, FromRational, PseudoField, Rounding, ToRational};
 use inari::*;
 use log::warn;
 use num_rational::Ratio;
-use num_traits::{One, Zero};
-use rug::{ops::CompleteRound, Float};
+use num_traits::Zero;
+use rug::{Float, ops::CompleteRound};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Interval<R: Rounding>(inari::Interval, PhantomData<R>);
@@ -78,6 +78,12 @@ impl<R: Rounding> PseudoField for Interval<R> {
     }
 }
 
+impl<R: Rounding> From<f64> for Interval<R> {
+    fn from(value: f64) -> Self {
+        Self(interval!(value, value).unwrap(), PhantomData)
+    }
+}
+
 impl<R: Rounding> Display for Interval<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<{:?}, {:?}>", self.0.inf(), self.0.sup())
@@ -101,48 +107,7 @@ impl<R: Rounding> ToRational for Interval<R> {
     }
 }
 
-impl<R: Rounding> FromCF for Interval<R> {
-    fn from_cont_fraction(cf: &mut ContFraction) -> Self {
-        if cf.values.len() <= 1 {
-            Interval::from_rational(&format!("{:?}", cf.values[0]), "1")
-        } else {
-            let val = Interval::from_rational(&format!("{:?}", cf.values.remove(0)), "1");
-            let mut rgt = Self::one();
-            rgt.div_assign(&Interval::from_cont_fraction(&mut ContFraction {
-                values: cf.values.clone(),
-            }));
-            val + rgt
-        }
-    }
-}
-
 impl<R: Rounding> Almost for Interval<R> {
-    fn almost_zero(&self) -> bool {
-        // Option 2: The middle point is eps close to zero.
-        // self.0.mid().abs() <= f64::EPSILON
-
-        // Option 1-3: The interval is contianed in <-eps, +eps>
-        if !self.0.contains(0.0) {
-            return false;
-        }
-        self.0
-            .interior(const_interval!(-f64::EPSILON, f64::EPSILON))
-
-        // Option 4: The interval is the point interval <0.0,0.0>
-        // self.is_zero()
-
-        // Option 5: Middle point is exactly zero.
-        // self.0.mid().is_zero()
-    }
-
-    fn almost_one(&self) -> bool {
-        if !self.0.contains(1.0) {
-            return false;
-        }
-        self.0
-            .interior(const_interval!(1.0 - f64::EPSILON, 1.0 + f64::EPSILON))
-    }
-
     fn cmp_eq(&self, other: &Self) -> bool {
         let abstol = Self::from_rational("1", "10000000");
         let epsi = Self::from_rational("1", "10000");
@@ -192,7 +157,21 @@ impl<R: Rounding> num_traits::Zero for Interval<R> {
     }
 
     fn is_zero(&self) -> bool {
-        self.0.inf().is_zero() || self.0.sup().is_zero()
+        // Option 2: The middle point is eps close to zero.
+        // self.0.mid().abs() <= f64::EPSILON
+
+        // Option 1-3: The interval is contianed in <-eps, +eps>
+        if !self.0.contains(0.0) {
+            return false;
+        }
+        self.0
+            .interior(const_interval!(-f64::EPSILON, f64::EPSILON))
+
+        // Option 4: The interval is the point interval <0.0,0.0>
+        // self.0.inf().is_zero() && self.0.sup().is_zero()
+
+        // Option 5: Middle point is exactly zero.
+        // self.0.mid().is_zero()
     }
 
     fn set_zero(&mut self) {

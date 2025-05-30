@@ -2,4 +2,6 @@
 target
 *.tra
 *.lab
+*.ctmc
+*.ma
 .old

@@ -1,6 +1,7 @@
 //! Data structures and algorithms for the representation of the matrix.
-use linalg::{fields::PseudoField, Vector};
+use linalg::{Vector, fields::PseudoField};
 use ndarray::{Array, Array1, Array2, Axis};
+use std::collections::HashMap;
 use std::io::Write;
 use std::{fmt::Display, fs::File};
 
@@ -21,6 +22,13 @@ pub trait Representation<F: PseudoField> {
     ///
     /// Panics if the access is out-of-bounds.
     fn get(&self, row: usize, column: usize) -> F;
+
+    /// Sets a value at the the given row and column.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the access is out-of-bounds.
+    fn set(&mut self, row: usize, column: usize, value: F) -> &mut Self;
 
     /// Returns the value at the diagonal of the given row.
     fn diagonal(&self, row: usize) -> F {
@@ -71,6 +79,15 @@ pub trait Representation<F: PseudoField> {
             }
         }
     }
+
+    fn rate_count(&self) -> HashMap<F, usize> {
+        let mut counts = HashMap::new();
+
+        for num in (0..self.size()).map(|i| self.diagonal(i)) {
+            *counts.entry(num).or_insert(0) += 1;
+        }
+        counts
+    }
 }
 
 /// Bidiagonal matrix representation.
@@ -90,9 +107,47 @@ pub trait Representation<F: PseudoField> {
 #[derive(Clone, Debug)]
 pub struct Bidiagonal<F>(pub Box<[F]>);
 
+fn find_next_larger<F: PseudoField>(arr: &[F], value: &F) -> F {
+    let mut ret = None;
+    for n in arr {
+        if n.lt(value) && (ret.is_none() || n.ge(&ret.clone().unwrap())) {
+            ret = Some(n.clone());
+        }
+    }
+    ret.unwrap()
+}
+
+fn find_next_smaller<F: PseudoField>(arr: &[F], value: &F) -> F {
+    let mut ret = None;
+    for n in arr {
+        if n.gt(value) && (ret.is_none() || n.le(&ret.clone().unwrap())) {
+            ret = Some(n.clone());
+        }
+    }
+    ret.unwrap()
+}
+
 impl<F: PseudoField> Bidiagonal<F> {
     pub fn new(size: usize) -> Self {
         Self(vec![F::zero(); size].into())
+    }
+
+    /// Returns [Some(\lambda_d, \lambda, \lambda_u)] if there exists \lambda, \lambda_d, \lambda_u, such that:
+    /// \lambda_d < \lambda < \lambda_u. If there are none, then it gives [None].
+    pub fn mid_values(&self) -> Option<(F, F, F)> {
+        let rates = &self.0.iter().as_slice();
+        let mid = self.0.get(self.size() / 2)?.to_owned();
+        let inf = find_next_smaller(rates, &mid);
+        let sup = find_next_larger(rates, &mid);
+        let mut dif_i = mid.clone();
+        dif_i.sub_assign(&inf);
+        let mut dif_s = sup.clone();
+        dif_s.sub_assign(&mid);
+        if mid.eq(&inf) || mid.eq(&sup) || dif_i > rates[0] || dif_s > rates[0] {
+            None
+        } else {
+            Some((inf, mid, sup))
+        }
     }
 
     pub fn set(&mut self, row: usize, value: F) -> &mut Self {
@@ -126,12 +181,7 @@ impl<F: PseudoField> From<Bidiagonal<F>> for TriangularArray<F> {
 
 impl<F: PseudoField> Display for Bidiagonal<F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "size: {}.\nrepr: {}",
-            self.0.len(),
-            TriangularArray::from(self.to_owned()).matrix
-        )
+        write!(f, "{}", TriangularArray::from(self.to_owned()).matrix)
     }
 }
 
@@ -162,6 +212,10 @@ impl<F: PseudoField> Representation<F> for Bidiagonal<F> {
         } else {
             F::zero()
         }
+    }
+
+    fn set(&mut self, row: usize, _column: usize, value: F) -> &mut Self {
+        self.set(row, value)
     }
 
     fn to_array_repr(&self) -> TriangularArray<F> {
@@ -310,6 +364,11 @@ impl<F: PseudoField> Representation<F> for TriangularArray<F> {
     fn size(&self) -> usize {
         self.size
     }
+
+    fn set(&mut self, row: usize, column: usize, value: F) -> &mut Self {
+        self.set(row, column, value)
+    }
+
     fn row_sum(&self, idx: usize) -> F {
         let mut sum = F::zero();
         for i in idx..self.size() {
@@ -425,6 +484,7 @@ impl<F: PseudoField> Triangular<F> {
 
     pub fn new_with_diagonal(diag: &[F]) -> Self {
         let mut ta = Triangular::new(diag.len());
+        #[allow(clippy::needless_range_loop)]
         for i in 0..ta.size - 1 {
             let mut elem = diag[i].clone();
             ta.set(i, i, elem.clone());
@@ -581,13 +641,13 @@ impl<F: PseudoField> Triangular<F> {
     }
 
     pub fn from_self_sliced(bidi: &Bidiagonal<F>, index: usize) -> Self {
-        Triangular::new_with_diagonal(&bidi.0.split_at(index).0.to_vec())
+        Triangular::new_with_diagonal(bidi.0.split_at(index).0)
     }
 }
 
 impl<F: PseudoField> From<&Bidiagonal<F>> for Triangular<F> {
     fn from(value: &Bidiagonal<F>) -> Self {
-        Triangular::new_with_diagonal(&value.0.to_vec())
+        Triangular::new_with_diagonal(&value.0)
     }
 }
 
@@ -600,6 +660,10 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
         self.get(row, column)
     }
 
+    fn set(&mut self, row: usize, column: usize, value: F) -> &mut Self {
+        self.set(row, column, value)
+    }
+
     fn is_type(&self) -> RepresentationType {
         RepresentationType::Triangular
     }
@@ -609,8 +673,6 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
         for i in idx..self.size() {
             sum.add_assign(&self.get(idx, i));
         }
-        // // correct the value if needed.
-        // sum.is_almost_zero_and_correct();
         sum
     }
 

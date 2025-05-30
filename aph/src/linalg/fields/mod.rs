@@ -54,17 +54,10 @@
 
 use ndarray::Array2;
 use num_rational::Ratio;
-use rug::ops::AddFrom;
-use rug::ops::SubFrom;
-use rug::Integer;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::{
-    fmt::{Debug, Display},
-    ops::{Add, Sub},
-};
 
 pub mod float64;
-pub mod float64_round;
 pub mod inari_int;
 pub mod interval_field;
 pub mod rational;
@@ -77,13 +70,7 @@ pub trait ToRational: Sized {
     fn to_rational(&self) -> (String, String);
 }
 
-pub trait FromCF: Sized {
-    fn from_cont_fraction(value: &mut ContFraction) -> Self;
-}
-
 pub trait Almost: Sized + num_traits::One + num_traits::Zero {
-    fn almost_zero(&self) -> bool;
-    fn almost_one(&self) -> bool;
     fn cmp_eq(&self, other: &Self) -> bool;
 }
 
@@ -102,18 +89,6 @@ pub enum Round {
     Up,
     // /// Round towards negative infinity.
     Down,
-}
-
-fn multiple_of(number: &rug::Float, of: &rug::Float, round: Round) -> rug::Float {
-    if number.clone().remainder(of).is_zero() || number.le(of) {
-        number.clone()
-    } else {
-        match round {
-            Round::Down | Round::Zero => number.sub(number.clone().remainder(of)),
-            Round::Up => number.add(of - number.clone().remainder(of)),
-            Round::Nearest => number.clone(),
-        }
-    }
 }
 
 pub trait Rounding: Debug + Sized + Clone + Ord + Eq + Hash {
@@ -185,7 +160,7 @@ pub trait SparseField:
     + Display
     + Hash
     + Almost
-    + FromCF 
+    + From<f64>
 {
     /// Machine epsilon value for F, based on f64::EPSILON.
     /// This is the difference between 1.0 and the next larger representable number.
@@ -206,7 +181,7 @@ pub trait SparseField:
         Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
     }
 
-    fn inf() -> Self{
+    fn inf() -> Self {
         let ratio = Ratio::from_float(1.0_f64.powf(-300.0)).unwrap();
         Self::from_rational(&ratio.numer().to_string(), &ratio.denom().to_string())
     }
@@ -240,7 +215,7 @@ pub trait PseudoField:
     + Eq
     + Hash
     + Almost
-    + FromCF 
+    + From<f64>
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -252,6 +227,13 @@ pub trait PseudoField:
     fn div_assign(&mut self, rhs: &Self);
 
     fn to_string(&self) -> String;
+    fn max_value() -> Self {
+        Self::from(f64::MAX)
+    }
+
+    fn min_value() -> Self {
+        Self::from(f64::MIN)
+    }
 }
 
 impl<T: SparseField> PseudoField for T {
@@ -331,90 +313,4 @@ pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<
         // result = strassen(&result, &matrix);
     }
     result
-}
-
-#[derive(Debug, Clone)]
-pub struct ContFraction {
-    pub values: Vec<rug::Integer>,
-}
-
-impl ContFraction {
-    pub fn new(values: Vec<Integer>) -> Self {
-        ContFraction { values }
-    }
-
-    pub fn convergent_n(&self, n: usize) -> Self {
-        let at = if n >= self.values.len() {
-            self.values.len()
-        } else {
-            n
-        };
-        let new_values = &self.values.split_at(at).0.to_owned();
-        Self::new(new_values.to_vec())
-    }
-
-    pub fn op_to_idx(&mut self, idx: usize) {
-        let at = if idx >= self.values.len() {
-            self.values.len() - 1
-        } else {
-            idx
-        };
-        self.values[at] += Integer::ONE;
-    }
-
-    pub fn _evaluate(&mut self) -> f64 {
-        if self.values.len() == 1 {
-            self.values.remove(0).to_i128_wrapping() as f64
-        } else {
-            let val = self.values.remove(0).to_i128_wrapping() as f64;
-            let rest = 1.0 / ContFraction::new(self.values.clone())._evaluate();
-            val + rest
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn incrase_last(&mut self) {
-        if self.values.len() < 4 {
-        } else {
-            self.values.last_mut().unwrap().add_from(&1_i32);
-        }
-        // if len is lt 10, do nothing
-    }
-
-    #[allow(dead_code)]
-    pub fn decrase_last(&mut self) {
-        // if is one, remove last
-        // if len is lt 10, do nothing
-        if self.values.len() < 4 {
-        } else {
-            let val = self.values.last_mut().unwrap();
-            if !(*val).eq(&Integer::from(1)) {
-                val.sub_from(&1_i32)
-            };
-        }
-    }
-
-    pub fn from_explicit_with_precision(numer: &str, denom: &str, precision: usize) -> Self {
-        if denom.eq("1") {
-            ContFraction::new(vec![numer.trim().parse::<rug::Integer>().unwrap()])
-        } else {
-            let num_str = numer.trim();
-            let denom_str = denom.trim();
-            let mut fractions = vec![];
-            let mut numer = num_str.parse::<rug::Integer>().unwrap();
-            let mut denom = denom_str.parse::<rug::Integer>().unwrap();
-            let (mut quot, mut rest) = numer.div_rem(denom.clone());
-            fractions.push(quot);
-            for _ in 1..precision {
-                numer = denom;
-                denom = rest;
-                (quot, rest) = numer.div_rem(denom.clone());
-                fractions.push(quot);
-                if rest.is_zero() {
-                    break;
-                }
-            }
-            ContFraction::new(fractions)
-        }
-    }
 }

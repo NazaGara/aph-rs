@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "Aph-rs",
+      "path": "."
+    }
+  ],
+  "extensions": {
+    "recommendations": [
+      "rust-lang.rust-analyzer",
+    ]
+  },
+  "settings": {
+    "editor.formatOnSave": true,
+    "rust-analyzer.check.command": "clippy",
+  },
+}

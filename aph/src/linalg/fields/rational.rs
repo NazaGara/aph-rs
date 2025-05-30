@@ -1,12 +1,16 @@
+use core::panic;
 use std::{
     fmt::Display,
     ops::{Add, AddAssign, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
-use super::{Almost, ContFraction, FromCF, FromRational, PseudoField, ToRational};
+use super::{Almost, FromRational, PseudoField, ToRational};
+use log::warn;
 use ndarray::ScalarOperand;
-use num_traits::{One, Zero};
-use rug::{ops::NegAssign, Complete};
+use rug::{
+    Complete,
+    ops::{CompleteRound, NegAssign},
+};
 
 /// An arbitrary-precision rational number implementing [`Field`].
 ///
@@ -34,40 +38,18 @@ impl Rational {
 }
 
 impl Almost for Rational {
-    // With rationals I can use exact comparison.
-    fn almost_one(&self) -> bool {
-        self.is_one()
-    }
-    fn almost_zero(&self) -> bool {
-        self.is_zero()
-    }
     fn cmp_eq(&self, other: &Self) -> bool {
         self.eq(other)
     }
 }
 
-impl FromCF for Rational {
-    fn from_cont_fraction(cf: &mut ContFraction) -> Self {
-        let mut numer = Self::one();
-        let mut pre_numer = Self::zero();
-        let mut denom = Self::zero();
-        let mut pre_denom = Self::one();
-        for e in cf.values.iter() {
-            let a_i = Self::from_rational(&format!("{:?}", e), "1");
-            let new_numer = numer.clone() * a_i.clone() + pre_numer;
-            let new_denom = denom.clone() * a_i.clone() + pre_denom;
-            pre_denom = denom;
-            pre_numer = numer;
-            denom = new_denom;
-            numer = new_numer;
-        }
-        Self::from_rational(&format!("{:?}", numer), &format!("{:?}", denom))
-    }
-}
-
 impl Display for Rational {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.numer(), self.denom())
+        if self.denom() == *"1" {
+            write!(f, "{}", self.numer())
+        } else {
+            write!(f, "{}/{}", self.numer(), self.denom())
+        }
     }
 }
 
@@ -183,42 +165,17 @@ impl PseudoField for Rational {
     }
 
     fn to_string(&self) -> String {
-        let value = if self.is_long() {
-            let cf = ContFraction::from_explicit_with_precision(&self.numer(), &self.denom(), 15);
-            let mut numer = 1_i128;
-            let mut pre_numer = 0_i128;
-            let mut denom = 0_i128;
-            let mut pre_denom = 1_i128;
-            for e in cf.values.iter() {
-                let a_i = e.to_i128_wrapping();
-                // We still can have some problems here with overflow in the multiplication.
-                // TODO:  Search for un option multiplication, otherwise use a try-catch like struct.
-                let new_numer = numer * a_i + pre_numer;
-                let new_denom = denom * a_i + pre_denom;
-                pre_denom = denom;
-                pre_numer = numer;
-
-                denom = new_denom;
-                numer = new_numer;
-            }
-
-            numer as f64 / denom as f64
-        } else {
-            let numer: f64 = self
-                .numer()
-                .replace("\"", "")
-                .parse::<f64>()
-                .unwrap_or_else(|_| panic!("Value: '{:?}' could not be parsed.", self.numer()));
-            let denom: f64 = self
-                .denom()
-                .replace("\"", "")
-                .parse::<f64>()
-                .unwrap_or_else(|_| panic!("Value: '{:?}' could not be parsed.", self.denom()));
-            numer / denom
+        let value = {
+            let numer = rug::Float::parse(self.numer())
+                .unwrap_or_else(|e| panic!("{}. Numerator can't be parsed: {}", e, self.numer()))
+                .complete(256);
+            let denom = rug::Float::parse(self.denom())
+                .unwrap_or_else(|e| panic!("{}\nDenominator can't be parsed: {}", e, self.denom()))
+                .complete(256);
+            (numer / denom).to_f64()
         };
-
         if value.is_nan() {
-            panic!(
+            warn!(
                 "Value is NaN. Numer: {:?}. Denom: {:?}",
                 self.numer(),
                 self.denom()

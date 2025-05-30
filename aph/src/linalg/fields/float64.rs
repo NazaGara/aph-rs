@@ -13,17 +13,14 @@ use std::{
     ops::{Add, Div, Mul, Sub},
 };
 
-use super::{
-    round_to_rug_round, Almost, ContFraction, FromCF, FromRational, Round, SparseField, ToRational,
-};
+use super::{Almost, FromRational, Round, SparseField, ToRational, round_to_rug_round};
 use num_rational::Ratio;
-use num_traits::One;
 use rug::{
+    Float,
     float::OrdFloat,
     ops::{
         AddAssignRound, CompleteRound, DivAssignRound, MulAssignRound, NegAssign, SubAssignRound,
     },
-    Float,
 };
 
 /// A 64-bit floating-point type implementing [`SparseField`].
@@ -55,19 +52,6 @@ impl From<rug::Float> for Float64 {
 }
 
 impl Almost for Float64 {
-    fn almost_one(&self) -> bool {
-        let mut self_abs = self.clone();
-        self_abs.abs_assign();
-        self_abs.sub_assign(&Self::one(), Round::Nearest);
-        self_abs.le(&Self::epsilon())
-    }
-
-    fn almost_zero(&self) -> bool {
-        let mut self_abs = self.clone();
-        self_abs.abs_assign();
-        self_abs.le(&Self::epsilon())
-    }
-
     fn cmp_eq(&self, other: &Self) -> bool {
         let abstol = Self::abstol();
         let epsilon = Self::reltol();
@@ -101,7 +85,7 @@ impl Display for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
         val.set_prec_round_64(53, rug::float::Round::Nearest);
-        write!(f, "{:.3}", val)
+        write!(f, "{:.25}", val)
     }
 }
 
@@ -121,24 +105,6 @@ impl ToRational for Float64 {
     }
 }
 
-impl FromCF for Float64 {
-    fn from_cont_fraction(cf: &mut ContFraction) -> Self {
-        if cf.values.len() <= 1 {
-            Float64::from(cf.values[0].to_i128_wrapping() as f64)
-        } else {
-            let val = Float64::from(cf.values.remove(0).to_i128_wrapping() as f64);
-            let mut rgt = Float64::one();
-            rgt.div_assign(
-                &Float64::from_cont_fraction(&mut ContFraction {
-                    values: cf.values.clone(),
-                }),
-                Round::Nearest,
-            );
-            val + rgt
-        }
-    }
-}
-
 impl num_traits::Zero for Float64 {
     fn set_zero(&mut self) {
         *self = Float64(rug::Float::with_val(53, 0.0).into());
@@ -149,7 +115,10 @@ impl num_traits::Zero for Float64 {
     }
 
     fn is_zero(&self) -> bool {
-        self.0.as_float().is_zero()
+        // *self.0.as_float() == 0.0
+        let mut self_abs = self.clone();
+        self_abs.abs_assign();
+        self_abs.le(&Self::epsilon())
     }
 }
 

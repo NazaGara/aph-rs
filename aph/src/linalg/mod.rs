@@ -68,36 +68,25 @@ impl<F: PseudoField> Vector<F> {
         accum
     }
 
+    pub fn rest(&self) -> F {
+        let mut one = F::one();
+        one.sub_assign(&self.sum());
+        one
+    }
+
+    pub fn mult_by_scalar(&self, scalar: &F) -> Self {
+        Vector::from(
+            self.elements
+                .iter()
+                .map(|e| scalar.clone() * e.clone())
+                .collect_vec(),
+        )
+    }
+
     pub fn zeros(size: usize) -> Self {
         Self {
             elements: vec![F::zero(); size].into(),
         }
-    }
-
-    pub fn scale(&self, bias: f64) -> Self {
-        let mut sum_scaled_probs = F::zero();
-
-        let scaled_vector = self
-            .elements
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                let mut prob = F::from_rational(&format!("{}", i as f64 * bias), "1"); // now is just the bias
-                prob.add_assign(e); // Now is the actual value.
-                let prob = if prob.lt(&F::zero()) { F::zero() } else { prob }; // Check that is not negative
-                sum_scaled_probs.add_assign(&prob);
-                prob
-            })
-            .collect::<Vec<_>>()
-            .iter()
-            .map(|sp| {
-                let mut e = sp.clone();
-                e.div_assign(&sum_scaled_probs);
-                e
-            })
-            .collect_vec();
-
-        scaled_vector.into()
     }
 
     pub fn unit(size: usize) -> Self {
@@ -108,8 +97,8 @@ impl<F: PseudoField> Vector<F> {
 
     pub fn one_and_zeros(idx: usize, size: usize) -> Self {
         let mut vector = Vector::zeros(size);
-        if let Some(first) = vector.elements.get_mut(idx) {
-            *first = F::one(); // set the first element to 1
+        if let Some(elem) = vector.elements.get_mut(idx) {
+            *elem = F::one();
         }
         vector
     }
@@ -164,6 +153,21 @@ impl<F: PseudoField> Vector<F> {
         Vector { elements: result }
     }
 
+    pub fn remove_idxs(&mut self, idxs: &[usize]) {
+        *self = Vector::from(
+            (0..self.size())
+                .zip(self.elements.iter())
+                .filter_map(|(i, r)| {
+                    if idxs.contains(&i) {
+                        None
+                    } else {
+                        Some(r.clone())
+                    }
+                })
+                .collect_vec(),
+        );
+    }
+
     pub fn remove_last(&self) -> Vector<F> {
         let mut elems = self.elements.to_vec();
         let _ = elems.pop();
@@ -199,6 +203,15 @@ impl<F: PseudoField> From<Vector<F>> for Vec<F> {
     }
 }
 
+impl<F: PseudoField> PartialEq for Vector<F> {
+    fn eq(&self, other: &Self) -> bool {
+        self.elements
+            .iter()
+            .zip(other.elements.iter())
+            .all(|(e1, e2)| e1 == e2)
+    }
+}
+
 impl<F: PseudoField> From<Vector<F>> for Array1<F> {
     fn from(value: Vector<F>) -> Self {
         Array1::from_iter(value.elements)
@@ -219,10 +232,8 @@ pub fn boxed_kronecker_op<F: PseudoField, T: Fn(&mut F, &F)>(
     let size_c = size_a * size_b;
     let mut result = vec![F::zero(); size_c].into_boxed_slice();
 
-    for i in 0..size_a {
-        let a_i = &matrix_a[i]; // Element in diagonal matrix A at (i, i)
-        for j in 0..size_b {
-            let b_j = &matrix_b[j];
+    for (i, a_i) in matrix_a.iter().enumerate().take(size_a) {
+        for (j, b_j) in matrix_b.iter().enumerate().take(size_b) {
             let mut elem = neutral.clone();
             op(&mut elem, a_i);
             op(&mut elem, b_j);

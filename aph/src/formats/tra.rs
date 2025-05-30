@@ -9,8 +9,8 @@
 //! IEEE, 2005.](https://doi.org/10.1109/QEST.2005.2)
 
 use crate::{
-    linalg::fields::PseudoField,  new_triangular_array, new_triangular, 
-    representation::Triangular, Aph,  TriangularArray, 
+    Aph, TriangularArray, linalg::fields::PseudoField, new_triangular, new_triangular_array,
+    representation::Triangular,
 };
 
 use super::{Cursor, ParseError};
@@ -36,7 +36,7 @@ pub fn parse_tri<F: PseudoField>(input: &str) -> Result<Aph<F, Triangular<F>>, P
         let rate = cursor.consume_rational::<F>()?;
         aph.repr_mut().set(row - 1, column - 1, rate);
     }
-    
+
     aph.initial = aph.initial.remove_last();
     aph.repr_mut().set_diagonal();
 
@@ -78,7 +78,7 @@ pub fn parse_array<F: PseudoField>(input: &str) -> Result<Aph<F, TriangularArray
     let transitions = cursor.consume_usize()?;
 
     let mut aph = new_triangular_array(states - 1);
-    
+
     for _ in 0..initials {
         let idx = cursor.consume_usize()?;
         let prob = cursor.consume_rational()?;

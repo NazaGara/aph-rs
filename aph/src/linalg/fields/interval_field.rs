@@ -6,12 +6,10 @@ use std::{
 };
 
 use super::{
-    rational::Rational, Almost, ContFraction, FromCF, FromRational, PseudoField, Round, Rounding,
-    SparseField, ToRational,
+    Almost, FromRational, PseudoField, Round, Rounding, SparseField, ToRational, rational::Rational,
 };
 use log::warn;
 use num_rational::Ratio;
-use num_traits::One;
 
 /// A [`PseudoField`] using interval arithmetic to track the rounding imprecision of
 /// a [`SparseField`].
@@ -46,49 +44,6 @@ pub(crate) enum IC {
 }
 
 impl<F: SparseField, R: Rounding> Almost for IF<F, R> {
-    fn almost_one(&self) -> bool {
-        if !self.contains(&F::one()) {
-            return false;
-        }
-        // Option 1-3: The interval is contianed in <-eps, +eps>
-        let mut low = F::one();
-        low.sub_assign(&F::epsilon(), Round::Down);
-        let mut upp = F::one();
-        upp.add_assign(&F::epsilon(), Round::Up);
-
-        self.contained_in(&IF {
-            inf: low,
-            sup: upp,
-            phantom: PhantomData,
-        })
-    }
-
-    fn almost_zero(&self) -> bool {
-        // Option 2: The middle point is eps close to zero.
-        // let mut mid = self.mid();
-        // mid.abs_assign();
-        // mid.le(&F::epsilon())
-
-        // Option 1: Zero is contained in the interval.
-        if !self.contains(&F::zero()) {
-            return false;
-        }
-        // Option 1-3: The interval is contianed in <-eps, +eps>
-        let mut eps_lo = F::epsilon();
-        eps_lo.neg_assign();
-        self.contained_in(&IF {
-            inf: eps_lo,
-            sup: F::epsilon(),
-            phantom: PhantomData,
-        })
-
-        // Option 4: The interval is the point interval <0.0,0.0>
-        // self.is_zero()
-
-        // Option 5: Middle point is exactly zero.
-        // self.mid().is_zero()
-    }
-
     fn cmp_eq(&self, other: &Self) -> bool {
         let abstol = Self::from_rational("1", "10000000");
         let epsi = Self::from_rational("1", "10000");
@@ -363,7 +318,7 @@ impl<F: SparseField, R: Rounding> PseudoField for IF<F, R> {
         };
         new_sup.inv_assign();
         new_inf.inv_assign();
-        Self {
+        *self = Self {
             inf: new_inf,
             sup: new_sup,
             phantom: PhantomData,
@@ -371,28 +326,10 @@ impl<F: SparseField, R: Rounding> PseudoField for IF<F, R> {
     }
 
     fn to_string(&self) -> String {
-        format!(
-            "{}",
-            match R::rounding() {
-                super::Round::Down | super::Round::Zero => self.low(),
-                super::Round::Nearest => self.mid(),
-                super::Round::Up => self.inf(),
-            }
-        )
-    }
-}
-
-impl<F: SparseField, R: Rounding> FromCF for IF<F, R> {
-    fn from_cont_fraction(cf: &mut ContFraction) -> Self {
-        if cf.values.len() <= 1 {
-            IF::<F, R>::from_rational(&format!("{:?}", cf.values[0]), "1")
-        } else {
-            let val = IF::<F, R>::from_rational(&format!("{:?}", cf.values.remove(0)), "1");
-            let mut rgt = IF::<F, R>::one();
-            rgt.div_assign(&IF::<F, R>::from_cont_fraction(&mut ContFraction {
-                values: cf.values.clone(),
-            }));
-            val + rgt
+        match R::rounding() {
+            super::Round::Down | super::Round::Zero => self.low().to_string(),
+            super::Round::Nearest => self.mid().to_string(),
+            super::Round::Up => self.inf().to_string(),
         }
     }
 }
@@ -450,7 +387,29 @@ impl<F: SparseField, R: Rounding> num_traits::Zero for IF<F, R> {
     }
 
     fn is_zero(&self) -> bool {
-        self.inf.is_zero() || self.sup.is_zero()
+        // Option 2: The middle point is eps close to zero.
+        // let mut mid = self.mid();
+        // mid.abs_assign();
+        // mid.le(&F::epsilon())
+
+        // Option 1: Zero is contained in the interval.
+        if !self.contains(&F::zero()) {
+            return false;
+        }
+        // Option 1-3: The interval is contianed in <-eps, +eps>
+        let mut eps_lo = F::epsilon();
+        eps_lo.neg_assign();
+        self.contained_in(&IF {
+            inf: eps_lo,
+            sup: F::epsilon(),
+            phantom: PhantomData,
+        })
+
+        // Option 4: The interval is the point interval <0.0,0.0>
+        // self.inf.is_zero() && self.sup.is_zero()
+
+        // Option 5: Middle point is exactly zero.
+        // self.mid().is_zero()
     }
 
     fn set_zero(&mut self) {
@@ -537,6 +496,16 @@ impl<F: SparseField, R: Rounding> PartialOrd for IF<F, R> {
 impl<F: SparseField, R: Rounding> From<&Rational> for IF<F, R> {
     fn from(value: &Rational) -> Self {
         Self::from_rational(&value.numer(), &value.denom())
+    }
+}
+
+impl<F: SparseField, R: Rounding> From<f64> for IF<F, R> {
+    fn from(value: f64) -> Self {
+        IF {
+            inf: F::from(value),
+            sup: F::from(value),
+            phantom: PhantomData,
+        }
     }
 }
 

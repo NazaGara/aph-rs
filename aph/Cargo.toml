@@ -3,7 +3,7 @@ name = "aph"
 version = "0.2.2"
 description = "A library for acyclic phase-type (APH) distributions."
 authors = ["Maximilian Köhl & Nazareno Garagiola <garagiola@depend.uni-saarland.de>"]
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/NazaGara/aph-rs"
 license = "MIT"
 
@@ -15,10 +15,10 @@ log = "0.4.22"
 ndarray = "0.16.1"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
-rand = "0.9.0"
+rand = "0.9.1"
+rayon = "1.10.0"
 rug = "1.27"
 thiserror = "1.0.67"
-tinyvec = "1.9.0"
 # z3 = "0.12.1"
 
 
