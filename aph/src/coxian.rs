@@ -68,8 +68,13 @@ impl<F: PseudoField> Coxian<F> {
     }
 
     /// Exports to prism compatible CTMCs
-    pub fn ctmc_export(&self, filename: &str) -> io::Result<()> {
-        let mut ctmc_file = File::create(format!("{:?}.ctmc", filename).replace("\"", ""))?;
+    pub fn ctmc_export(&self, filename: &str) -> io::Result<String> {
+        let filename = if !filename.ends_with(".ctmc") {
+            format!("{:?}.ctmc", filename)
+        } else {
+            filename.to_string()
+        };
+        let mut ctmc_file = File::create(filename.clone())?;
 
         let size = self.lambdas.len();
 
@@ -86,7 +91,7 @@ impl<F: PseudoField> Coxian<F> {
             let to_next = to_abs.clone() * self.factors[i].clone(); // to the next state
             to_abs.sub_assign(&to_next); // to the final state
 
-            if i + 1 != size {
+            if i + 1 != size && !to_abs.is_zero() {
                 writeln!(
                     ctmc_file,
                     "<> s={} -> {} : (s'={}) + {} : (s'={});",
@@ -117,6 +122,6 @@ impl<F: PseudoField> Coxian<F> {
             filename
         );
 
-        Ok(())
+        Ok(filename)
     }
 }

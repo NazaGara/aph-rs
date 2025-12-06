@@ -5,7 +5,6 @@ use std::{
 };
 
 use super::{Almost, FromRational, PseudoField, ToRational};
-use log::warn;
 use ndarray::ScalarOperand;
 use rug::{
     Complete,
@@ -61,27 +60,27 @@ impl From<Rational> for f64 {
 
 impl num_traits::One for Rational {
     fn one() -> Self {
-        Self(rug::Rational::from_f64(1.0).unwrap())
+        Self(rug::Rational::ONE.clone())
     }
 
     fn is_one(&self) -> bool {
-        self.0 == 1.0
+        &self.0 == rug::Rational::ONE
     }
     fn set_one(&mut self) {
-        *self = Self(rug::Rational::from_f64(1.0).unwrap())
+        *self = Self(rug::Rational::ONE.clone())
     }
 }
 
 impl num_traits::Zero for Rational {
     fn zero() -> Self {
-        Self(rug::Rational::from_f64(0.0).unwrap())
+        Self(rug::Rational::ZERO.clone())
     }
 
     fn is_zero(&self) -> bool {
-        self.0 == 0.0
+        &self.0 == rug::Rational::ZERO
     }
     fn set_zero(&mut self) {
-        *self = Self(rug::Rational::from_f64(0.0).unwrap())
+        *self = Self(rug::Rational::ZERO.clone())
     }
 }
 
@@ -135,6 +134,12 @@ impl ToRational for Rational {
     }
 }
 
+impl sprs::MulAcc for Rational {
+    fn mul_acc(&mut self, a: &Self, b: &Self) {
+        self.add_assign(&(a.clone() * b.clone()))
+    }
+}
+
 impl PseudoField for Rational {
     fn neg_assign(&mut self) {
         self.0.neg_assign();
@@ -161,7 +166,7 @@ impl PseudoField for Rational {
     }
 
     fn inv_assign(&mut self) {
-        *self = Self::from_rational(&self.0.denom().to_string(), &self.0.numer().to_string());
+        self.0.recip_mut();
     }
 
     fn to_string(&self) -> String {
@@ -175,7 +180,7 @@ impl PseudoField for Rational {
             (numer / denom).to_f64()
         };
         if value.is_nan() {
-            warn!(
+            eprintln!(
                 "Value is NaN. Numer: {:?}. Denom: {:?}",
                 self.numer(),
                 self.denom()

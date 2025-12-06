@@ -305,13 +305,13 @@ impl<F: SparseField, R: Rounding> PseudoField for IF<F, R> {
 
     fn inv_assign(&mut self) {
         let mut new_sup = if self.low().is_zero() {
-            warn!("Upper bound is INFINITY, using 1/eps.");
+            eprintln!("Upper bound is INFINITY, using 1/eps.");
             F::epsilon()
         } else {
             self.low().clone()
         };
         let mut new_inf = if self.inf().is_zero() {
-            warn!("Lower bound is INFINITY, using 1/eps.");
+            eprintln!("Lower bound is INFINITY, using 1/eps.");
             F::epsilon()
         } else {
             self.inf().clone()

@@ -1,32 +1,23 @@
+use crate::utils::{Config, NumericField, run_models};
+use aph::{
+    aph::Aph,
+    formats::ft::utils::{ConstructionMethod, RoundMode},
+    linalg::fields::{
+        PseudoField, Round, float64::Float64, inari_int::Interval, rational::Rational,
+    },
+    representation::bidiagonal::Bidiagonal,
+};
+use clap::Parser;
+use log::info;
+use serde_json::json;
 use std::{
     io,
     path::{Path, PathBuf},
     time::Instant,
 };
 
-#[allow(unused)]
-use aph::linalg::{
-    Vector,
-    fields::{FromRational, Near},
-};
-#[allow(unused)]
-use aph::{
-    aph::Aph,
-    formats::{self},
-    linalg::fields::{
-        Down, PseudoField, Up, float64::Float64, inari_int::Interval, interval_field::IF,
-        rational::Rational,
-    },
-    operations::*,
-    representation::*,
-};
-use clap::{Parser, ValueEnum};
-use log::{info, warn};
-use memory_stats::memory_stats;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-pub mod models;
-use models::*;
+mod test;
+mod utils;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -37,117 +28,116 @@ struct Args {
     /// Output file.
     #[arg(short, long, requires = "input")]
     output: Option<String>,
-    #[arg(value_enum, short, long, default_value_t=NumericField::Rational)]
-    numeric_field: NumericField,
-    #[arg(value_enum, short, long, default_value_t=Model::Ex37, conflicts_with="input")]
-    model: Model,
+    /// Configuration parameters.
+    #[command(flatten)]
+    config: Config,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum NumericField {
-    Rational,
-    F64,
-    Inari,
-    IntF64Sup,
-    IntF64Inf,
-}
-
-#[allow(unused)]
-fn run(field: NumericField, model: Model) -> (usize, usize, io::Result<()>) {
-    match field {
-        NumericField::Rational => choose_model::<Rational>(model, "rational"),
-        NumericField::F64 => choose_model::<Float64>(model, "f64"),
-        NumericField::Inari => choose_model::<Interval<Down>>(model, "inari"),
-        NumericField::IntF64Sup => choose_model::<IF<Float64, Up>>(model, "int-f64-sup"),
-        NumericField::IntF64Inf => choose_model::<IF<Float64, Down>>(model, "int-f64-inf"),
-        _ => (0, 0, Ok(())),
-    }
-}
-
-pub fn parse_file_tri<F: PseudoField>(path: &Path) -> Aph<F, Triangular<F>> {
+fn parse_file<F: PseudoField>(
+    path: &Path,
+    round: Round,
+    reduce: bool,
+    modularise: bool,
+    method: ConstructionMethod,
+    mode: RoundMode,
+) -> Aph<F, Bidiagonal<F>> {
     let source = std::fs::read_to_string(path).unwrap();
     if path.extension().unwrap() == "tra" {
-        formats::tra::parse_tri(&source).unwrap()
+        let mut aph = aph::formats::tra::parse_tri(&source).unwrap();
+        if reduce {
+            aph.reduce();
+        }
+        aph
+    } else if path.extension().unwrap() == "dft" {
+        aph::formats::ft::aph_from_ft::<F>(&source, reduce, modularise, method, round, mode)
     } else {
-        panic!("Only .tar format supported for representation.")
+        panic!("Only `.tra` or `.dft` formats supported.")
     }
 }
 
-pub fn parse_file_array<F: PseudoField>(path: &Path) -> Aph<F, TriangularArray<F>> {
-    let source = std::fs::read_to_string(path).unwrap();
-    if path.extension().unwrap() == "tra" {
-        formats::tra::parse_array(&source).unwrap()
-    } else {
-        panic!("Only .tar format supported for representation.")
+/// Reads model from file.
+/// It returns a triple with the size of the representation, the expected time until absorbtion and, if and output was provided, the return code of the save to file.
+/// By default, it uses .tra files as output, but if specified .ctmc or .ma, it writes a Prism model.
+pub fn from_file<F: PseudoField>(
+    file: PathBuf,
+    output: Option<String>,
+    round: Round,
+    reduce: bool,
+    modularise: bool,
+    method: ConstructionMethod,
+    mode: RoundMode,
+) -> (usize, String, io::Result<String>) {
+    let aph = parse_file::<F>(&file, round, reduce, modularise, method, mode);
+    let mttf = aph.expected_value().unwrap();
+    let size = aph.size();
+    match output {
+        Some(file) if file.ends_with(".ctmc") => {
+            (size, mttf.to_string(), aph.to_coxian().ctmc_export(&file))
+        }
+        Some(file) if file.ends_with(".ma") => (size, mttf.to_string(), aph.ma_export(&file)),
+        Some(file) => {
+            let file = file.replace("\"", "");
+            // let _ = aph.to_coxian().ctmc_export(&file);
+            // let _ = aph.ma_export(&file);
+            (size, mttf.to_string(), aph.export_to_tra(&file))
+        }
+        None => (size, mttf.to_string(), Ok("".to_string())),
     }
 }
 
+#[allow(unreachable_code)]
 fn main() {
     env_logger::init();
-
     let args = Args::parse();
-    let (pre_physical_mem, pre_virtual_mem) = if let Some(usage) = memory_stats() {
-        (usage.physical_mem, usage.virtual_mem)
-    } else {
-        warn!("Couldn't get the current memory usage :(");
-        (0, 0)
-    };
     let time_start = Instant::now();
+    info!(
+        "Field: {:?} - Round: {:?}",
+        args.config.numeric_field, args.config.round
+    );
 
-    info!("Using [{:?}] as numerical field.", args.numeric_field);
-
-    let (reductions, size, _result) = match args.input {
-        Some(file) => match args.numeric_field {
-            NumericField::Rational => _from_file::<Rational>(file, args.output),
-            NumericField::F64 => _from_file::<Float64>(file, args.output),
-            NumericField::IntF64Inf => _from_file::<IF<Float64, Down>>(file, args.output),
-            NumericField::IntF64Sup => _from_file::<IF<Float64, Up>>(file, args.output),
-            NumericField::Inari => _from_file::<Interval<Down>>(file, args.output),
-            // _ => (0, 0, Ok(())),
+    let (size, mttf, output_file) = match args.input.clone() {
+        Some(file) => match args.config.numeric_field {
+            NumericField::Rational => from_file::<Rational>(
+                file,
+                args.output,
+                args.config.round,
+                args.config.reduce,
+                args.config.modularise,
+                args.config.method,
+                args.config.mode,
+            ),
+            NumericField::F64 => from_file::<Float64>(
+                file,
+                args.output,
+                args.config.round,
+                args.config.reduce,
+                args.config.modularise,
+                args.config.method,
+                args.config.mode,
+            ),
+            NumericField::Interval => from_file::<Interval>(
+                file,
+                args.output,
+                args.config.round,
+                args.config.reduce,
+                args.config.modularise,
+                args.config.method,
+                args.config.mode,
+            ),
         },
-        None => run(args.numeric_field, args.model),
+        None => run_models(args.config),
     };
 
     let elapsed = time_start.elapsed();
-    let (post_physical_mem, post_virtual_mem) = if let Some(usage) = memory_stats() {
-        (usage.physical_mem, usage.virtual_mem)
-    } else {
-        warn!("Couldn't get the current memory usage :(");
-        (0, 0)
-    };
 
     println!(
         "{}",
         json!({
-            "model": args.model,
-            "field": args.numeric_field,
-            "memory": ((post_physical_mem - pre_physical_mem) as f64 / 1048576.0,
-            (post_virtual_mem - pre_virtual_mem) as f64 / 1048576.0),
-            "reductions": reductions,
+            "outfile": output_file.unwrap_or("".to_string()),
+            "input": args.input.unwrap_or_else(|| serde_json::to_string(&args.config.model).unwrap().replace("\"", "").into()),
             "size": size,
+            "mttf": mttf,
             "elapsed": format!("{:?}", elapsed.as_secs_f64())
         })
-    );
-}
-
-pub fn _from_file<F: PseudoField>(
-    file: PathBuf,
-    output: Option<String>,
-) -> (usize, usize, io::Result<()>) {
-    let time_start = Instant::now();
-    let dist = parse_file_tri::<F>(&file);
-    let mut bidi = dist.spa();
-    let total_red = bidi.reduce();
-    let elapsed = time_start.elapsed();
-    info!(
-        "After the reduction, APH size: {}. Elapsed: {:?}",
-        bidi.size(),
-        elapsed.as_secs_f64()
-    );
-    let size = bidi.size();
-    match output {
-        Some(file) => (total_red, size, bidi.to_coxian().ctmc_export(&file)),
-        None => (total_red, size, Ok(())),
-    }
+    )
 }

@@ -7,6 +7,10 @@
 //! - Significand precision: 53 bits (52 explicitly stored)
 //!
 //!
+//! The IEEE 754 standard specifies a binary128 as having:
+//! Sign bit: 1 bit
+//! Exponent width: 15 bits
+//! Significand precision: 113 bits (112 explicitly stored)
 
 use std::{
     fmt::{Debug, Display},
@@ -23,12 +27,20 @@ use rug::{
     },
 };
 
+const SIGNIFICAND: u32 = 53;
+
 /// A 64-bit floating-point type implementing [`SparseField`].
 ///
 /// Currently this is based on [`rug::Float`] but in the future we may implement this
 /// type using architecture specific features.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Float64(rug::float::OrdFloat);
+
+impl sprs::MulAcc for Float64 {
+    fn mul_acc(&mut self, a: &Self, b: &Self) {
+        self.add_assign(&(a.clone() * b.clone()), Round::Nearest)
+    }
+}
 
 impl Debug for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -84,16 +96,16 @@ impl Almost for Float64 {
 impl Display for Float64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
-        val.set_prec_round_64(53, rug::float::Round::Nearest);
+        val.set_prec_round_64(SIGNIFICAND as u64, rug::float::Round::Nearest);
         write!(f, "{:.25}", val)
     }
 }
 
 impl FromRational for Float64 {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
-        let num = Float::parse(numerator).unwrap().complete(53);
-        let den = Float::parse(denominator).unwrap().complete(53);
-        Self(rug::Float::with_val(53, num / den).into())
+        let num = Float::parse(numerator).unwrap().complete(SIGNIFICAND);
+        let den = Float::parse(denominator).unwrap().complete(SIGNIFICAND);
+        Self(rug::Float::with_val(SIGNIFICAND, num / den).into())
     }
 }
 
@@ -107,11 +119,11 @@ impl ToRational for Float64 {
 
 impl num_traits::Zero for Float64 {
     fn set_zero(&mut self) {
-        *self = Float64(rug::Float::with_val(53, 0.0).into());
+        *self = Float64(rug::Float::with_val(SIGNIFICAND, 0.0).into());
     }
 
     fn zero() -> Self {
-        Self(rug::Float::with_val(53, 0.0).into())
+        Self(rug::Float::with_val(SIGNIFICAND, 0.0).into())
     }
 
     fn is_zero(&self) -> bool {
@@ -128,16 +140,16 @@ impl num_traits::One for Float64 {
     }
 
     fn one() -> Self {
-        Self(rug::Float::with_val(53, 1.0).into())
+        Self(rug::Float::with_val(SIGNIFICAND, 1.0).into())
     }
     fn set_one(&mut self) {
-        *self = Float64(rug::Float::with_val(53, 1.0).into());
+        *self = Float64(rug::Float::with_val(SIGNIFICAND, 1.0).into());
     }
 }
 
 impl From<f64> for Float64 {
     fn from(value: f64) -> Self {
-        Self(rug::Float::with_val_64(53, value).into())
+        Self(rug::Float::with_val_64(SIGNIFICAND as u64, value).into())
     }
 }
 
@@ -181,7 +193,7 @@ impl SparseField for Float64 {
     }
 
     fn inv_assign(&mut self) {
-        *self = Self(rug::Float::with_val_64(53, 1.0.div(rug::Float::from(self.0.clone()))).into())
+        self.0.as_float_mut().recip_mut();
     }
 
     fn to_string(&self) -> String {
@@ -190,8 +202,8 @@ impl SparseField for Float64 {
             let (numer, denom) = self.to_rational();
             panic!("Value is NaN. Numer: {:?}. Denom: {:?}", numer, denom)
         }
-        val.set_prec_round(53, round_to_rug_round(Round::Nearest));
-        format!("{:.53}", val)
+        val.set_prec_round(SIGNIFICAND, round_to_rug_round(Round::Nearest));
+        format!("{:.8}", val)
     }
 }
 
@@ -199,7 +211,10 @@ impl Add for Float64 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(
-            self.0.as_float().add(rhs.0.as_float()).complete(53),
+            self.0
+                .as_float()
+                .add(rhs.0.as_float())
+                .complete(SIGNIFICAND),
         ))
     }
 }
@@ -208,7 +223,10 @@ impl Mul for Float64 {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(
-            self.0.as_float().mul(rhs.0.as_float()).complete(53),
+            self.0
+                .as_float()
+                .mul(rhs.0.as_float())
+                .complete(SIGNIFICAND),
         ))
     }
 }
@@ -219,7 +237,10 @@ impl Sub for Float64 {
         let mut neg_rhs = rhs.clone();
         neg_rhs.neg_assign();
         Self(OrdFloat::from(
-            self.0.as_float().add(neg_rhs.0.as_float()).complete(53),
+            self.0
+                .as_float()
+                .add(neg_rhs.0.as_float())
+                .complete(SIGNIFICAND),
         ))
     }
 }
@@ -228,7 +249,10 @@ impl Div for Float64 {
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(
-            self.0.as_float().div(rhs.0.as_float()).complete(53),
+            self.0
+                .as_float()
+                .div(rhs.0.as_float())
+                .complete(SIGNIFICAND),
         ))
     }
 }

@@ -52,14 +52,15 @@
 //!
 //! Note that the traits are defined with heap-allocated numeric types in mind.
 
+use clap::ValueEnum;
 use ndarray::Array2;
 use num_rational::Ratio;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
 pub mod float64;
 pub mod inari_int;
-pub mod interval_field;
 pub mod rational;
 
 pub trait FromRational: Sized {
@@ -79,19 +80,40 @@ pub trait Almost: Sized + num_traits::One + num_traits::Zero {
 pub trait Field: PseudoField {}
 
 /// A *rounding mode* for the operations on [`SparseField`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+// #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(
+    Debug, Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize,
+)]
+// #[serde(rename_all = "kebab-case")]
 pub enum Round {
     /// Round towards the nearest representable number.
+    #[serde(rename = "N")]
+    #[default]
     Nearest,
     /// Round towards zero.
+    #[serde(rename = "Z")]
     Zero,
     /// Round towards positive infinity.
+    #[serde(rename = "U")]
     Up,
-    // /// Round towards negative infinity.
+    /// Round towards negative infinity.
+    #[serde(rename = "D")]
     Down,
 }
 
-pub trait Rounding: Debug + Sized + Clone + Ord + Eq + Hash {
+impl Display for Round {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Round::Down => write!(f, "down"),
+            Round::Up => write!(f, "up"),
+            Round::Nearest => write!(f, "near"),
+            Round::Zero => write!(f, "zero"),
+        }
+    }
+}
+
+// TODO: Cleanup, remove trait and structs.
+pub trait Rounding: Debug + Sized + Clone + Ord + Eq + Hash + Send + Sync {
     fn rounding() -> Round;
 }
 
@@ -148,11 +170,11 @@ fn round_to_rug_round(round: Round) -> rug::float::Round {
 /// floating-point numbers.
 pub trait SparseField:
     Debug
-    + Sized
     + Clone
     + Ord
     + Eq
     + Into<f64>
+    + From<f64>
     + FromRational
     + ToRational
     + num_traits::Zero
@@ -160,7 +182,9 @@ pub trait SparseField:
     + Display
     + Hash
     + Almost
-    + From<f64>
+    + Send
+    + Sync
+    + sprs::MulAcc
 {
     /// Machine epsilon value for F, based on f64::EPSILON.
     /// This is the difference between 1.0 and the next larger representable number.
@@ -203,19 +227,21 @@ pub trait SparseField:
 /// rational numbers, floating-point numbers, or intervals.
 pub trait PseudoField:
     Debug
-    + Sized
     + Clone
     + PartialOrd
     + PartialEq
+    + Eq
+    + From<f64>
     + FromRational
     + ToRational
     + num_traits::Zero
     + num_traits::One
     + Display
-    + Eq
     + Hash
     + Almost
-    + From<f64>
+    + Send
+    + Sync
+    + sprs::MulAcc
 {
     fn neg_assign(&mut self);
     fn abs_assign(&mut self);
@@ -271,18 +297,10 @@ impl<T: SparseField> PseudoField for T {
 }
 
 // ! Matrix operations
-// Matrixes A and B are upper triangular.
-// pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>, dst: &mut Array2<F>){
 pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>) -> Array2<F> {
-    // Check if the dimensions are compatible
-    assert!(
-        a.shape()[1] == b.shape()[0],
-        "Incompatible dimensions for matrix multiplication."
-    );
-    // Get dimensions of the result array
+    assert!(a.shape()[1] == b.shape()[0], "Incompatible dimensions.");
     let rows = a.shape()[0];
     let cols = b.shape()[1];
-    // New array for result
     let mut dst: ndarray::ArrayBase<ndarray::OwnedRepr<F>, ndarray::Dim<[usize; 2]>> =
         Array2::zeros((rows, cols));
     for j in 0..cols {
@@ -299,18 +317,15 @@ pub fn dot_product<F: PseudoField>(a: &Array2<F>, b: &Array2<F>) -> Array2<F> {
 }
 
 pub fn matrix_power<F: PseudoField>(matrix: &Array2<F>, power: usize) -> Array2<F> {
-    // Check if the matrix is square
     let n = matrix.shape()[0];
     if matrix.shape()[1] != n {
         panic!("Matrix must be square to compute power.");
     }
-    // Start with an identity matrix of the same size
     let mut result: ndarray::ArrayBase<ndarray::OwnedRepr<F>, ndarray::Dim<[usize; 2]>> =
         Array2::eye(n);
 
     for _ in 0..power {
         result = dot_product(&result, matrix);
-        // result = strassen(&result, &matrix);
     }
     result
 }

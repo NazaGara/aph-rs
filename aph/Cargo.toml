@@ -2,27 +2,29 @@
 name = "aph"
 version = "0.2.2"
 description = "A library for acyclic phase-type (APH) distributions."
-authors = ["Maximilian Köhl & Nazareno Garagiola <garagiola@depend.uni-saarland.de>"]
+authors = [
+    "Maximilian Köhl & Nazareno Garagiola <garagiola@depend.uni-saarland.de>",
+]
 edition = "2024"
 repository = "https://github.com/NazaGara/aph-rs"
 license = "MIT"
 
 [dependencies]
+clap = "4.5.40"
 env_logger = "0.11.5"
 inari = "2.0.0"
+index_vec = "0.1.4"
+indicatif = "0.17.11"
 itertools = "0.13.0"
 log = "0.4.22"
 ndarray = "0.16.1"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
-rand = "0.9.1"
-rayon = "1.10.0"
+rayon = "1.11.0"
 rug = "1.27"
+serde = "1.0.219"
+sprs = "0.11.3"
 thiserror = "1.0.67"
-# z3 = "0.12.1"
-
 
 [package.metadata.docs.rs]
-rustdoc-args = [
-    "--html-in-header", "../docs/katex-header.html",
-]
+rustdoc-args = ["--html-in-header", "../docs/katex-header.html"]

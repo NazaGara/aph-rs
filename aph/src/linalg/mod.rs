@@ -4,6 +4,7 @@ use std::fmt::Display;
 
 use itertools::Itertools;
 use ndarray::{Array, Array1};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 // use crate::representation::Triangular;
 
@@ -58,6 +59,12 @@ impl<F: PseudoField> Vector<F> {
         self.len() == 0
     }
 
+    pub fn push(&mut self, value: F) {
+        let mut elems = self.elements.to_vec();
+        elems.push(value);
+        *self = Vector::from(elems);
+    }
+
     pub fn sum(&self) -> F {
         let mut accum = F::zero();
         let _ = self
@@ -108,19 +115,29 @@ impl<F: PseudoField> Vector<F> {
     }
 
     pub fn scalar_product(&self, other: &Self) -> F {
-        let mut result = F::zero();
+        // let mut result = F::zero();
         assert!(
             self.elements.len() == other.elements.len(),
             "Vectors must have the same dimension."
         );
-        for (lhs, rhs) in self.elements.iter().zip(other.elements.iter()) {
-            if !lhs.is_zero() {
-                let mut product = lhs.clone();
-                product.mul_assign(rhs);
-                result.add_assign(&product);
-            }
-        }
-        result
+        // for (lhs, rhs) in self.elements.iter().zip(other.elements.iter()) {
+        //     if !lhs.is_zero() && !rhs.is_zero() {
+        //         let mut product = lhs.clone();
+        //         product.mul_assign(rhs);
+        //         result.add_assign(&product);
+        //     }
+        // }
+        // result
+
+        self.elements
+            .par_iter()
+            .zip(other.elements.par_iter())
+            .fold(
+                || F::zero(),
+                |acc, (lhs, rhs)| acc.add(lhs.clone() * rhs.clone()),
+            )
+            .reduce_with(|a, b| a + b)
+            .unwrap()
     }
 
     pub fn div_assign(&mut self, scalar: &F) {

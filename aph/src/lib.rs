@@ -1,6 +1,9 @@
 use aph::{Aph, BidiagonalAph};
 use linalg::{Vector, fields::PseudoField};
-use representation::{Bidiagonal, Triangular, TriangularArray};
+use representation::{
+    bidiagonal::Bidiagonal,
+    triangular::{Triangular, TriangularArray},
+};
 
 pub mod aph;
 pub mod coxian;
@@ -9,6 +12,9 @@ pub mod linalg;
 pub mod operations;
 mod polynomial;
 pub mod representation;
+pub mod round_op;
+pub mod utils;
+pub mod voting;
 
 /// Constructs a new [Bidiagonal] APH distribution.
 /// Constructs an initial probability vector of the given size.
@@ -35,17 +41,4 @@ pub fn new_triangular_array<F: PseudoField>(size: usize) -> Aph<F, TriangularArr
 pub fn new_triangular<F: PseudoField>(size: usize) -> Aph<F, Triangular<F>> {
     assert!(size > 0, "Size must be greater than zero.");
     Aph::new(Vector::one_and_zeros(0, size), Triangular::new(size))
-}
-
-impl<F: PseudoField> PartialEq for BidiagonalAph<F> {
-    fn eq(&self, other: &Self) -> bool {
-        self.size() == other.size()
-            && self.initial == other.initial
-            && self
-                .repr
-                .0
-                .iter()
-                .zip(other.repr().0.iter())
-                .all(|(r1, r2)| r1 == r2)
-    }
 }

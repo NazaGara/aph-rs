@@ -1,42 +1,40 @@
 use std::{
     fmt::Display,
-    marker::PhantomData,
     ops::{Add, Mul, Sub},
 };
 
-use super::{Almost, FromRational, PseudoField, Rounding, ToRational};
+use super::{Almost, FromRational, PseudoField, ToRational};
 use inari::*;
-use log::warn;
 use num_rational::Ratio;
 use num_traits::Zero;
 use rug::{Float, ops::CompleteRound};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Interval<R: Rounding>(inari::Interval, PhantomData<R>);
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Interval(inari::Interval);
 
-impl<R: Rounding> PseudoField for Interval<R> {
+impl PseudoField for Interval {
     fn neg_assign(&mut self) {
-        self.mul_assign(&Self(interval_exact!("[-1.0]").unwrap(), PhantomData))
+        self.mul_assign(&Self(interval_exact!("[-1.0]").unwrap()))
     }
 
     fn abs_assign(&mut self) {
-        *self = Self(self.0.abs(), PhantomData);
+        *self = Self(self.0.abs());
     }
 
     fn add_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.add(rhs.0), PhantomData);
+        *self = Self(self.0.add(rhs.0));
     }
 
     fn sub_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.sub(rhs.0), PhantomData);
+        *self = Self(self.0.sub(rhs.0));
     }
 
     fn mul_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0.mul(rhs.0), PhantomData);
+        *self = Self(self.0.mul(rhs.0));
     }
 
     fn div_assign(&mut self, rhs: &Self) {
-        *self = Self(self.0 / rhs.0, PhantomData);
+        *self = Self(self.0 / rhs.0);
     }
 
     fn inv_assign(&mut self) {
@@ -44,10 +42,10 @@ impl<R: Rounding> PseudoField for Interval<R> {
         let new_sup = if self.0.inf().is_infinite() {
             0.0
         } else if self.0.inf().is_zero() {
-            warn!("Sup bound is INFINITY.");
+            eprintln!("Sup bound is INFINITY.");
             f64::INFINITY
         } else if self.0.inf().is_nan() {
-            warn!("Sup bound is NAN.");
+            eprintln!("Sup bound is NAN.");
             f64::NAN
         } else {
             1.0 / self.0.inf()
@@ -55,51 +53,50 @@ impl<R: Rounding> PseudoField for Interval<R> {
         let new_inf = if self.0.sup().is_infinite() {
             0.0
         } else if self.0.sup().is_zero() {
-            warn!("Inf bound is INFINITY.");
+            eprintln!("Inf bound is INFINITY.");
             f64::INFINITY
         } else if self.0.sup().is_nan() {
-            warn!("Inf bound is NAN.");
+            eprintln!("Inf bound is NAN.");
             f64::NAN
         } else {
             1.0 / self.0.sup()
         };
-        self.div_assign(&Self(interval!(new_inf, new_sup).unwrap(), PhantomData));
+        self.div_assign(&Self(interval!(new_inf, new_sup).unwrap()));
     }
 
     fn to_string(&self) -> String {
-        format!(
-            "{}",
-            match R::rounding() {
-                super::Round::Down | super::Round::Zero => self.0.inf(),
-                super::Round::Nearest => self.0.mid(),
-                super::Round::Up => self.0.sup(),
-            }
-        )
+        format!("[{}, {}]", self.0.inf(), self.0.sup())
     }
 }
 
-impl<R: Rounding> From<f64> for Interval<R> {
+impl sprs::MulAcc for Interval {
+    fn mul_acc(&mut self, a: &Self, b: &Self) {
+        self.add_assign(&(a.clone() * b.clone()))
+    }
+}
+
+impl From<f64> for Interval {
     fn from(value: f64) -> Self {
-        Self(interval!(value, value).unwrap(), PhantomData)
+        Self(interval!(value, value).unwrap())
     }
 }
 
-impl<R: Rounding> Display for Interval<R> {
+impl Display for Interval {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<{:?}, {:?}>", self.0.inf(), self.0.sup())
     }
 }
 
-impl<R: Rounding> FromRational for Interval<R> {
+impl FromRational for Interval {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
         let num = Float::parse(numerator).unwrap().complete(53);
         let den = Float::parse(denominator).unwrap().complete(53);
         let div = (num / den).to_f64();
-        Self(interval!(div, div).unwrap(), PhantomData)
+        Self(interval!(div, div).unwrap())
     }
 }
 
-impl<R: Rounding> ToRational for Interval<R> {
+impl ToRational for Interval {
     fn to_rational(&self) -> (String, String) {
         let ratio = Ratio::from_float(self.0.mid())
             .expect("Something went wrong when converting the Interval to Rational.");
@@ -107,7 +104,7 @@ impl<R: Rounding> ToRational for Interval<R> {
     }
 }
 
-impl<R: Rounding> Almost for Interval<R> {
+impl Almost for Interval {
     fn cmp_eq(&self, other: &Self) -> bool {
         let abstol = Self::from_rational("1", "10000000");
         let epsi = Self::from_rational("1", "10000");
@@ -137,9 +134,9 @@ impl<R: Rounding> Almost for Interval<R> {
     }
 }
 
-impl<R: Rounding> num_traits::One for Interval<R> {
+impl num_traits::One for Interval {
     fn one() -> Self {
-        Self(const_interval!(1.0, 1.0), PhantomData)
+        Self(const_interval!(1.0, 1.0))
     }
 
     fn is_one(&self) -> bool {
@@ -151,9 +148,9 @@ impl<R: Rounding> num_traits::One for Interval<R> {
     }
 }
 
-impl<R: Rounding> num_traits::Zero for Interval<R> {
+impl num_traits::Zero for Interval {
     fn zero() -> Self {
-        Self(const_interval!(0.0, 0.0), PhantomData)
+        Self(const_interval!(0.0, 0.0))
     }
 
     fn is_zero(&self) -> bool {
@@ -179,29 +176,29 @@ impl<R: Rounding> num_traits::Zero for Interval<R> {
     }
 }
 
-impl<R: Rounding> Add for Interval<R> {
+impl Add for Interval {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0.add(rhs.0), PhantomData)
+        Self(self.0.add(rhs.0))
     }
 }
 
-impl<R: Rounding> Mul for Interval<R> {
+impl Mul for Interval {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        Self(self.0.mul(rhs.0), PhantomData)
+        Self(self.0.mul(rhs.0))
     }
 }
 
-impl<R: Rounding> Sub for Interval<R> {
+impl Sub for Interval {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0.sub(rhs.0), PhantomData)
+        Self(self.0.sub(rhs.0))
     }
 }
 
-impl<R: Rounding> PartialOrd for Interval<R> {
+impl PartialOrd for Interval {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         if self.0.strict_less(other.0) {
             Some(std::cmp::Ordering::Less)
