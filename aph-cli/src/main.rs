@@ -3,7 +3,8 @@ use aph::{
     aph::Aph,
     formats::ft::utils::{ConstructionMethod, RoundMode},
     linalg::fields::{
-        PseudoField, Round, float64::Float64, inari_int::Interval, rational::Rational,
+        PseudoField, Round, float::CustomFloat, float64::Float64, inari_int::Interval,
+        rational::Rational,
     },
     representation::bidiagonal::Bidiagonal,
 };
@@ -43,7 +44,7 @@ fn parse_file<F: PseudoField>(
 ) -> Aph<F, Bidiagonal<F>> {
     let source = std::fs::read_to_string(path).unwrap();
     if path.extension().unwrap() == "tra" {
-        let mut aph = aph::formats::tra::parse_tri(&source).unwrap();
+        let mut aph = aph::formats::tra::parse_tra(&source).unwrap();
         if reduce {
             aph.reduce();
         }
@@ -77,8 +78,6 @@ pub fn from_file<F: PseudoField>(
         Some(file) if file.ends_with(".ma") => (size, mttf.to_string(), aph.ma_export(&file)),
         Some(file) => {
             let file = file.replace("\"", "");
-            // let _ = aph.to_coxian().ctmc_export(&file);
-            // let _ = aph.ma_export(&file);
             (size, mttf.to_string(), aph.export_to_tra(&file))
         }
         None => (size, mttf.to_string(), Ok("".to_string())),
@@ -91,12 +90,21 @@ fn main() {
     let args = Args::parse();
     let time_start = Instant::now();
     info!(
-        "Field: {:?} - Round: {:?}",
-        args.config.numeric_field, args.config.round
+        "Field: {:?} - Round: {:?}. Method: {:?}",
+        args.config.numeric_field, args.config.round, args.config.method
     );
 
     let (size, mttf, output_file) = match args.input.clone() {
         Some(file) => match args.config.numeric_field {
+            NumericField::Float => from_file::<CustomFloat>(
+                file,
+                args.output,
+                args.config.round,
+                args.config.reduce,
+                args.config.modularise,
+                args.config.method,
+                args.config.mode,
+            ),
             NumericField::Rational => from_file::<Rational>(
                 file,
                 args.output,

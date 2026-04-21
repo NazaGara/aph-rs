@@ -647,15 +647,17 @@ where
     I: Iterator<Item = &'a BidiagonalAph<F>>,
 {
     match (round, mode) {
-        (Round::Down, RoundMode::Mix) => {
-            apply_many(inputs, |x, y| min_round_1::<F>(x, y, Round::Down))
+        (Round::Down, RoundMode::Mix) | (Round::Down, RoundMode::MixTLE) => {
+            apply_many(inputs, |x, y| minimum_round::<F>(x, y, Round::Down))
         }
-        (Round::Down, RoundMode::Depth) => {
-            apply_many(inputs, |x, y| min_round_by_level::<F>(x, y, Round::Down))
+        (Round::Down, RoundMode::DepthTLE) | (Round::Down, RoundMode::Depth) => {
+            apply_many(inputs, |x, y| mininimum_round_depth::<F>(x, y, Round::Down))
         }
-        (Round::Up, RoundMode::Mix) => apply_many(inputs, |x, y| min_round_1::<F>(x, y, Round::Up)),
-        (Round::Up, RoundMode::Depth) => {
-            apply_many(inputs, |x, y| min_round_by_level::<F>(x, y, Round::Up))
+        (Round::Up, RoundMode::MixTLE) | (Round::Up, RoundMode::Mix) => {
+            apply_many(inputs, |x, y| minimum_round::<F>(x, y, Round::Up))
+        }
+        (Round::Up, RoundMode::DepthTLE) | (Round::Up, RoundMode::Depth) => {
+            apply_many(inputs, |x, y| mininimum_round_depth::<F>(x, y, Round::Up))
         }
         (Round::Nearest, _) | (Round::Zero, _) => apply_many(inputs, |x, y| min_bidi::<F>(x, y)),
     }
@@ -670,15 +672,17 @@ where
     I: Iterator<Item = &'a BidiagonalAph<F>>,
 {
     match (round, mode) {
-        (Round::Down, RoundMode::Mix) => {
-            apply_many(inputs, |x, y| max_round_1::<F>(x, y, Round::Down))
+        (Round::Down, RoundMode::MixTLE) | (Round::Down, RoundMode::Mix) => {
+            apply_many(inputs, |x, y| maximum_round::<F>(x, y, Round::Down))
         }
-        (Round::Down, RoundMode::Depth) => {
-            apply_many(inputs, |x, y| max_round_by_level::<F>(x, y, Round::Down))
+        (Round::Down, RoundMode::DepthTLE) | (Round::Down, RoundMode::Depth) => {
+            apply_many(inputs, |x, y| maximum_round_depth::<F>(x, y, Round::Down))
         }
-        (Round::Up, RoundMode::Mix) => apply_many(inputs, |x, y| max_round_1::<F>(x, y, Round::Up)),
-        (Round::Up, RoundMode::Depth) => {
-            apply_many(inputs, |x, y| max_round_by_level::<F>(x, y, Round::Up))
+        (Round::Up, RoundMode::MixTLE) | (Round::Up, RoundMode::Mix) => {
+            apply_many(inputs, |x, y| maximum_round::<F>(x, y, Round::Up))
+        }
+        (Round::Up, RoundMode::DepthTLE) | (Round::Up, RoundMode::Depth) => {
+            apply_many(inputs, |x, y| maximum_round_depth::<F>(x, y, Round::Up))
         }
         (Round::Nearest, _) | (Round::Zero, _) => apply_many(inputs, |x, y| max_bidi::<F>(x, y)),
     }
@@ -692,5 +696,5 @@ pub fn vot_bidiagonal<'a, I, F: PseudoField + 'a>(
 where
     I: Iterator<Item = &'a BidiagonalAph<F>>,
 {
-    build_vot_bidi(inputs.collect_vec(), k)
+    build_vot_bidi(&inputs.collect_vec(), k)
 }

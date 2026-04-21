@@ -3,6 +3,9 @@
 mod tests {
 
     mod basic {
+
+        const EPS: f64 = 1e-8;
+
         use aph::{
             formats::ft::{aph_from_ft, utils::ConstructionMethod},
             linalg::fields::rational::Rational,
@@ -22,7 +25,7 @@ mod tests {
                 aph::formats::ft::utils::RoundMode::Mix,
             );
             let mttf = f64::from(aph.expected_value().unwrap());
-            assert!(f64::abs(1.444444444 - mttf) < 1e-6);
+            assert!(f64::abs(1.444444444 - mttf) < EPS);
         }
 
         #[test]
@@ -40,7 +43,7 @@ mod tests {
                 aph::formats::ft::utils::RoundMode::Mix,
             );
             let mttf = f64::from(aph.expected_value().unwrap());
-            assert!(f64::abs(0.2535546458 - mttf) < 1e-6);
+            assert!(f64::abs(0.2535546458 - mttf) < EPS);
         }
 
         #[test]
@@ -57,7 +60,7 @@ mod tests {
                 aph::formats::ft::utils::RoundMode::Mix,
             );
             let mttf = f64::from(aph.expected_value().unwrap());
-            assert!(f64::abs(0.6388888889 - mttf) < 1e-6);
+            assert!(f64::abs(0.6388888889 - mttf) < EPS);
         }
     }
 
@@ -66,6 +69,7 @@ mod tests {
             formats::ft::{aph_from_ft, utils::ConstructionMethod},
             linalg::fields::rational::Rational,
         };
+        const EPS: f64 = 1e-8;
         #[test]
         fn csp_and_2sh() {
             let source = std::fs::read_to_string("src/tests/csp_and_2sh.dft").unwrap();
@@ -80,7 +84,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 5.067566491;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -98,7 +102,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 6.147435897;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -116,7 +120,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.185897436;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -134,7 +138,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 15.57519292;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -152,7 +156,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 2.265766842;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -170,7 +174,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 11.69623688;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -189,7 +193,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.053282828;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -200,6 +204,7 @@ mod tests {
             formats::ft::{aph_from_ft, utils::ConstructionMethod},
             linalg::fields::rational::Rational,
         };
+        const EPS: f64 = 1e-8;
         #[test]
         fn fdep_gate() {
             let source = std::fs::read_to_string("src/tests/fdep_gate.dft").unwrap();
@@ -214,7 +219,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 0.4876800946;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -233,7 +238,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 0.5909090909;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -252,7 +257,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.007575758;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -271,7 +276,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.170201713;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -282,6 +287,7 @@ mod tests {
             formats::ft::{aph_from_ft, utils::ConstructionMethod},
             linalg::fields::rational::Rational,
         };
+        const EPS: f64 = 1e-8;
         #[test]
         fn seq() {
             let source = std::fs::read_to_string("src/tests/seq.dft").unwrap();
@@ -296,7 +302,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.84047619;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -314,7 +320,7 @@ mod tests {
             let mttf = f64::from(aph.expected_value().unwrap());
             let true_val = 1.839482903;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }
@@ -333,7 +339,7 @@ mod tests {
 
             let true_val = 1.227777778;
             assert!(
-                f64::abs(true_val - mttf) < 1e-6,
+                f64::abs(true_val - mttf) < EPS,
                 "(True) {true_val} vs {mttf} (APH)"
             );
         }

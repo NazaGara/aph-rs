@@ -135,7 +135,7 @@ fn explore_state_space<F: PseudoField>(ft: &NodeTree<F>) -> CTMCAut<F> {
             let neighbor_raw_st =
                 st.take_transition_from(&nid, ft.nodes[nid].component_size().try_into().unwrap());
 
-            //TODO:  We could have a parallel state, that contains the NodeId of the gates, on which we can mark them as failed directly, and the we use that to sanitize
+            //TODO: We could have a parallel state, that contains the NodeId of the gates, on which we can mark them as failed directly, and the we use that to sanitize
             let neighbor_raw_code = neighbor_raw_st.to_code();
             let neighbor_code = match seen_states_map.entry(neighbor_raw_code.clone()) {
                 Entry::Occupied(entry) => Some(entry.get().clone().0),
@@ -169,52 +169,6 @@ fn explore_state_space<F: PseudoField>(ft: &NodeTree<F>) -> CTMCAut<F> {
     seen_states = seen_states.into_iter().unique().collect_vec();
     seen_states.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // let n_states = seen_states.len();
-    // let mut generator = TriMat::new((n_states, n_states));
-    // let index: HashMap<StateCode, usize> = seen_states
-    //     .iter()
-    //     .enumerate()
-    //     .filter_map(|(idx, (s, _))| {
-    //         if !s.is_abs() {
-    //             Some((s.clone(), idx))
-    //         } else {
-    //             None
-    //         }
-    //     })
-    //     .collect::<HashMap<StateCode, usize>>();
-    // let mut diagonal = vec![F::zero(); n_states];
-    // for Transition(from, to, rate) in transitions.iter() {
-    //     let i = *index.get(from).unwrap();
-    //     diagonal[i].add_assign(rate);
-    //     if let Some(&idx) = index.get(to) {
-    //         let mut neg_rate = rate.clone();
-    //         neg_rate.neg_assign();
-    //         generator.add_triplet(i, idx, neg_rate);
-    //     }
-    // }
-    // diagonal
-    //     .into_iter()
-    //     .enumerate()
-    //     .for_each(|(i, val)| generator.add_triplet(i, i, val));
-    // let sparse_matrix = generator.to_csr::<usize>();
-
-    // let mut matrix = ndarray::Array2::<F>::zeros((n_states, n_states));
-    // for (val, (row, col)) in sparse_matrix.view() {
-    //     matrix[(row, col)].add_assign(val); // add in case of duplicate entries
-    // }
-    // use std::io::Write;
-    // let filepath = format!("sparse_matr.csv");
-    // info!("Writing to: {filepath:?}");
-    // let mut file = std::fs::File::create(filepath).unwrap();
-    // for row in matrix.rows() {
-    //     let _ = writeln!(
-    //         file,
-    //         "{}",
-    //         itertools::Itertools::join(&mut row.iter().map(|e| e.to_string()), ",")
-    //     );
-    // }
-    // todo!();
-
     let (seen_states, initial): (Vec<StateCode>, Vec<F>) = seen_states.into_iter().unzip();
 
     info!(
@@ -240,7 +194,7 @@ fn explore_state_space<F: PseudoField>(ft: &NodeTree<F>) -> CTMCAut<F> {
         })
         .into_group_map_by(|((from, _), _)| from.clone())
         .into_iter()
-        // Separate into shape:  from : {to : rate}
+        // Separate into shape: from : {to : rate}
         .map(|(key, grouped)| {
             (
                 key.clone(),
@@ -262,7 +216,7 @@ fn create_node_w_exploration<F: PseudoField>(
     round: Round,
 ) -> Option<FTNode<F>> {
     let ftaut: CTMCAut<F> = explore_state_space(ft);
-    let mut aph = ftaut.to_aph(method, ft.root_id, round);
+    let mut aph = ftaut.generate_aph(method, ft.root_id, round);
     if reduce {
         aph.reduce();
     }
@@ -280,10 +234,26 @@ fn create_node<F: PseudoField>(
     let time_start = Instant::now();
     let aph = if ft.is_static() && ft.is_independent() {
         info!("Creating node ({:?}) with operators.", ft.root_id);
-        create_node_w_operators(ft.root_id, ft, reduce, round, mode)
+        if matches!(mode, RoundMode::DepthTLE) || matches!(mode, RoundMode::MixTLE) {
+            if ft.root_id == 0 {
+                create_node_w_operators(ft.root_id, ft, reduce, round, mode)
+            } else {
+                create_node_w_operators(ft.root_id, ft, reduce, Round::Nearest, mode)
+            }
+        } else {
+            create_node_w_operators(ft.root_id, ft, reduce, round, mode)
+        }
     } else {
         info!("Creating node ({:?}) with exploration.", ft.root_id);
-        create_node_w_exploration(ft, reduce, method, round)
+        if matches!(mode, RoundMode::DepthTLE) || matches!(mode, RoundMode::MixTLE) {
+            if ft.root_id == 0 {
+                create_node_w_exploration(ft, reduce, method, round)
+            } else {
+                create_node_w_exploration(ft, reduce, method, Round::Nearest)
+            }
+        } else {
+            create_node_w_exploration(ft, reduce, method, round)
+        }
     };
     info!("Elapsed `Construction`: {:?}.", time_start.elapsed());
 
@@ -298,7 +268,7 @@ fn create_node_w_operators<F: PseudoField>(
     mode: RoundMode,
 ) -> Option<FTNode<F>> {
     let node = ft.nodes[self_id].clone();
-    match node {
+    match &node {
         FTNode::Component(_, _) => Some(node),
         // Gatetypes are only And - Or - Vot - Seq
         FTNode::Gate(gate_type, children) => {
@@ -308,7 +278,6 @@ fn create_node_w_operators<F: PseudoField>(
                     create_node_w_operators::<F>(*child_id, ft, reduce, round, mode).unwrap()
                 })
                 .collect::<Vec<FTNode<F>>>();
-
             let mut aph: BidiagonalAph<F> = match gate_type {
                 GateType::And => maximum_bidiagonal(
                     child_components.iter().map(|n| n.get_component().unwrap()),
@@ -329,7 +298,7 @@ fn create_node_w_operators<F: PseudoField>(
                         .iter()
                         .map(|n| n.get_component().unwrap())
                         .collect_vec();
-                    build_vot_bidi(generators, k)
+                    build_vot_bidi(&generators, *k)
                 }
                 _ => unreachable!(
                     "This should not happen. The FT Metadata has been collected wrong."

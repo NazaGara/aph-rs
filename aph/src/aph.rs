@@ -2,7 +2,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use itertools::{Itertools, join};
 use linalg::{
     Vector,
-    fields::{Almost, FromRational, PseudoField, float64::Float64},
+    fields::{FromRational, PseudoField, float64::Float64},
 };
 use sprs::CsVec;
 
@@ -22,7 +22,7 @@ use crate::{
     polynomial,
     representation::{self, sparse::Sparse},
     utils::{
-        MTTFError, count_rate_by_levels, invert_bidiagonal, matrix_vector_mul,
+        MTTFError, count_rate_by_levels, invert_bidiagonal, matrix_vector_mul, max_value_counts,
         multiply_w_vec_boxed, multiply_w_vec_par,
     },
 };
@@ -264,6 +264,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
                 "SPA: {spinner:.cyan} [{elapsed_precise}] {wide_bar:.cyan/white} {pos}/{len} ({eta_precise})",
             ).unwrap()
             .progress_chars("#>-"));
+            pb.inc(0);
 
             self.inplace_multiply_with_vec(
                 &vector,
@@ -311,7 +312,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             }
         }
         let elapsed = time_start.elapsed();
-        info!("Time Elapsed `SPA`: {:?}. Size: {:?}", elapsed, self.size());
+        info!("Elapsed `SPA`: {:?}. Size: {:?}", elapsed, self.size());
 
         Aph::new(initial, bidiagonal)
     }
@@ -337,6 +338,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
                 "SPA: {spinner:.cyan} [{elapsed_precise}] {wide_bar:.cyan/white} {pos}/{len} ({eta_precise})",
             ).unwrap()
             .progress_chars("#>-"));
+            pb.inc(0);
 
             self.inplace_multiply_with_vec(
                 &vector,
@@ -384,7 +386,7 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             }
         }
         let elapsed = time_start.elapsed();
-        info!("Time Elapsed `SPA`: {:?}. Size: {:?}", elapsed, self.size());
+        info!("Elapsed `SPA`: {:?}. Size: {:?}", elapsed, self.size());
 
         Aph::new(initial, bidiagonal)
     }
@@ -405,42 +407,65 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
         let mut vector = Vector::unit(large_size);
         let mut result = Vector::zeros(large_size);
 
-        let pb = ProgressBar::new((final_size + 1 + 1) as u64);
-        pb.set_style(
+        if log::log_enabled!(log::Level::Info) {
+            let pb = ProgressBar::new((final_size + 1 + 1) as u64);
+            pb.set_style(
             ProgressStyle::with_template(
                 "SPA: {spinner:.cyan} [{elapsed_precise}] {wide_bar:.cyan/white} {pos}/{len} ({eta_precise})",
             ).unwrap()
             .progress_chars("#>-"),
         );
-        pb.inc(1);
-        // Assemble the product of th P matrix and the spectral matrix in parallel.
-        multiply_w_vec_par(
-            getter,
-            &vector,
-            &mut result,
-            &bidiagonal.diagonal(final_size - 1),
-            &F::zero(),
-        );
+            pb.inc(0);
+            // Assemble the product of th P matrix and the spectral matrix in parallel.
+            multiply_w_vec_par(
+                getter,
+                &vector,
+                &mut result,
+                &bidiagonal.diagonal(final_size - 1),
+                &F::zero(),
+            );
 
-        new_initial[final_size - 1] = pre_initial.scalar_product(&result);
-        std::mem::swap(&mut vector, &mut result);
-        pb.inc(1);
-
-        for row in (0..final_size - 1).rev() {
-            let mut divide = bidiagonal.diagonal(row);
-            divide.neg_assign();
-            let mut add = bidiagonal.diagonal(row + 1);
-            add.neg_assign();
-            multiply_w_vec_par(getter, &vector, &mut result, &divide, &add);
-
-            new_initial[row] = pre_initial.scalar_product(&result);
-            std::mem::swap(&mut result, &mut vector);
+            new_initial[final_size - 1] = pre_initial.scalar_product(&result);
+            std::mem::swap(&mut vector, &mut result);
             pb.inc(1);
+
+            for row in (0..final_size - 1).rev() {
+                let mut divide = bidiagonal.diagonal(row);
+                divide.neg_assign();
+                let mut add = bidiagonal.diagonal(row + 1);
+                add.neg_assign();
+                multiply_w_vec_par(getter, &vector, &mut result, &divide, &add);
+
+                new_initial[row] = pre_initial.scalar_product(&result);
+                std::mem::swap(&mut result, &mut vector);
+                pb.inc(1);
+            }
+            pb.finish_and_clear();
+        } else {
+            multiply_w_vec_par(
+                getter,
+                &vector,
+                &mut result,
+                &bidiagonal.diagonal(final_size - 1),
+                &F::zero(),
+            );
+
+            new_initial[final_size - 1] = pre_initial.scalar_product(&result);
+            std::mem::swap(&mut vector, &mut result);
+
+            for row in (0..final_size - 1).rev() {
+                let mut divide = bidiagonal.diagonal(row);
+                divide.neg_assign();
+                let mut add = bidiagonal.diagonal(row + 1);
+                add.neg_assign();
+                multiply_w_vec_par(getter, &vector, &mut result, &divide, &add);
+                new_initial[row] = pre_initial.scalar_product(&result);
+                std::mem::swap(&mut result, &mut vector);
+            }
         }
-        pb.finish_and_clear();
 
         let elapsed = time_start.elapsed();
-        info!("Time Elapsed `SPA`: {:?}. Size: {:?}", elapsed, final_size);
+        info!("Elapsed `SPA`: {:?}. Size: {:?}", elapsed, final_size);
         Aph::new(new_initial, bidiagonal)
     }
 
@@ -459,20 +484,40 @@ impl<F: PseudoField, R: Representation<F>> Aph<F, R> {
             adj: &HashMap<usize, Vec<usize>>,
             level: usize,
             depths: &mut [usize],
+            size: &usize,
         ) {
             depths[current] = usize::max(depths[current], level);
             if let Some(froms) = adj.get(&current) {
                 for nxt in froms {
-                    dfs(*nxt, adj, level + 1, depths);
+                    if nxt != size {
+                        dfs(*nxt, adj, level + 1, depths, size);
+                    }
                 }
             }
         }
 
         let mut depths = vec![usize::MIN; size];
-        dfs(0, &adj, 0, &mut depths);
-
+        dfs(0, &adj, 0, &mut depths, &size);
         // Then, on each depth level, take all the unique rates.
         let counts = count_rate_by_levels(&depths, &diagonal);
+
+        let mut new_diagonal: Vec<F> = vec![];
+        counts.iter().for_each(|(lambda, k)| {
+            new_diagonal.extend(vec![(*lambda).clone(); (*k).try_into().unwrap()])
+        });
+        new_diagonal.sort_by(|x, y| {
+            y.partial_cmp(x)
+                .unwrap_or_else(|| panic!("Could not sort the values: {:?} and {:?}.", y, x))
+        });
+        Bidiagonal::<F>::from(Vector::from(new_diagonal))
+    }
+
+    /// Returns a bidiagonal representation of the hypoexpoenntial which is the
+    /// longest core series of the representation.
+    pub fn lcs_by_dp(&self) -> Bidiagonal<F> {
+        let diagonal = Vec::from(self.all_diagonal());
+        let adj = self.repr().adjacency_map();
+        let counts = max_value_counts(&adj, &diagonal);
 
         let mut new_diagonal: Vec<F> = vec![];
         counts.iter().for_each(|(lambda, k)| {
@@ -647,7 +692,7 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
             if val.lt(&F::zero()) {
                 let elapsed = time_start.elapsed();
                 debug!(
-                    "Time Elapsed: 'LES': {:?}. (IDX: {:?}, VAL: {:?}) UNSAT",
+                    "Elapsed: 'LES': {:?}. (IDX: {:?}, VAL: {:?}) UNSAT",
                     elapsed, index, val
                 );
                 return None;
@@ -669,7 +714,7 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
         if val.lt(&F::zero()) {
             let elapsed = time_start.elapsed();
             debug!(
-                "Time Elapsed: 'LES': {:?}. (IDX: {:?}, VAL: {:?}) UNSAT",
+                "Elapsed: 'LES': {:?}. (IDX: {:?}, VAL: {:?}) UNSAT",
                 elapsed, index, val
             );
             return None;
@@ -682,10 +727,7 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
         // The LES has solution, by Lemmas 3.8 and 3.9.
         // Check that system will have solution, but I dont know if we can determine this before seeing the whole LES.
 
-        debug!(
-            "Time Elapsed: 'Eq 3.14': {:?}. (IDX: {:?}) SAT",
-            elapsed, index
-        );
+        debug!("Elapsed: 'Eq 3.14': {:?}. (IDX: {:?}) SAT", elapsed, index);
         model.extend(rest_ini.to_vec());
 
         Some(Vector {
@@ -728,11 +770,11 @@ impl<F: PseudoField> Aph<F, Bidiagonal<F>> {
         }
         let elapsed = time_start.elapsed();
 
-        if !pre_accum.cmp_eq(&post_accum) {
-            info!("Time Elapsed 'minisolver': {:?}. UNSAT", elapsed);
+        if !pre_accum.eq(&post_accum) {
+            info!("Elapsed 'minisolver': {:?}. UNSAT", elapsed);
             return false;
         }
-        info!("Time Elapsed 'minisolver': {:?}. SAT", elapsed);
+        info!("Elapsed 'minisolver': {:?}. SAT", elapsed);
         true
     }
 
@@ -960,6 +1002,7 @@ impl<F: PseudoField> Aph<F, Sparse<F>> {
             ).unwrap()
             .progress_chars("#>-"),
         );
+        pb.inc(0);
         let mut initial: Vector<F> = Vector::zeros(size);
         let mut result: Vec<F> = vec![F::zero(); size];
         let mut vector: Vec<F> = vec![F::one(); size];
@@ -1018,11 +1061,12 @@ impl<F: PseudoField> Aph<F, Sparse<F>> {
         if log::log_enabled!(log::Level::Info) {
             let pb = ProgressBar::new(final_size as u64);
             pb.set_style(
-            ProgressStyle::with_template(
+                ProgressStyle::with_template(
                 "SPA: {spinner:.cyan} [{elapsed_precise}] {wide_bar:.cyan/white} {pos}/{len} ({eta_precise})",
             ).unwrap()
             .progress_chars("#>-"),
         );
+            pb.inc(0);
             multiply_w_vec_boxed(
                 &getter,
                 &vector,
@@ -1068,7 +1112,7 @@ impl<F: PseudoField> Aph<F, Sparse<F>> {
         }
 
         let elapsed = time_start.elapsed();
-        info!("Time Elapsed `SPA`: {:?}. Size: {:?}", elapsed, final_size);
+        info!("Elapsed `SPA`: {:?}. Size: {:?}", elapsed, final_size);
 
         Aph::new(initial, bidiagonal)
     }

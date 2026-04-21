@@ -22,7 +22,6 @@ pub struct BasicEvent {
     pub lambdas: Vec<f64>,
     pub phases: Option<usize>,
     pub dorm: f64,
-    // TODO: Deal with discrete probs?
 }
 
 #[allow(unused)]

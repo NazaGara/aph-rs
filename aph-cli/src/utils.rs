@@ -21,7 +21,7 @@ use std::thread;
 
 #[derive(Parser, Debug, Clone, Copy)]
 pub struct Config {
-    /// Reduce the APH using Reza POulungans Algorithm.
+    /// Reduce the APH using Reza Pulungans Algorithm.
     #[arg(long, default_value_t = false)]
     pub reduce: bool,
     /// Numeric Field to employ.
@@ -50,6 +50,7 @@ pub struct Config {
 pub enum NumericField {
     Rational,
     F64,
+    Float,
     Interval,
 }
 
@@ -77,7 +78,7 @@ pub fn run_models(config: Config) -> (usize, String, io::Result<(String)>) {
         NumericField::Rational => {
             choose_model::<Rational>(config.numeric_field, config.model, config.round)
         }
-        NumericField::F64 => {
+        NumericField::Float | NumericField::F64 => {
             choose_model::<Float64>(config.numeric_field, config.model, config.round)
         }
         NumericField::Interval => {

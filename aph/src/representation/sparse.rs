@@ -64,7 +64,6 @@ impl<F: PseudoField> Representation<F> for Sparse<F> {
         self
     }
 
-    /// TODO: Test kronecker methods
     fn kron_prod(&self, other: &Self) -> Self {
         let n = self.size * other.size;
         let mut tri = TriMat::new((n, n));

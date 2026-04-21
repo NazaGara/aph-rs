@@ -15,7 +15,7 @@ use crate::{
 
 use super::{Cursor, ParseError};
 
-pub fn parse_tri<F: PseudoField>(input: &str) -> Result<Aph<F, Bidiagonal<F>>, ParseError> {
+pub fn parse_tra<F: PseudoField>(input: &str) -> Result<Aph<F, Bidiagonal<F>>, ParseError> {
     let mut cursor = Cursor::new(input);
     cursor.consume_tag("STATES")?;
     let states = cursor.consume_usize()?;
@@ -39,7 +39,9 @@ pub fn parse_tri<F: PseudoField>(input: &str) -> Result<Aph<F, Bidiagonal<F>>, P
 
     aph.initial = aph.initial.remove_last();
     aph.repr_mut().set_diagonal();
-    Ok(aph.spa())
+
+    let bidi = aph.lcs_by_dp();
+    Ok(aph.spa_with_bidiagonal(bidi))
 }
 
 pub fn parse_array<F: PseudoField>(input: &str) -> Result<Aph<F, TriangularArray<F>>, ParseError> {

@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
+pub mod float;
 pub mod float64;
 pub mod inari_int;
 pub mod rational;
@@ -71,9 +72,9 @@ pub trait ToRational: Sized {
     fn to_rational(&self) -> (String, String);
 }
 
-pub trait Almost: Sized + num_traits::One + num_traits::Zero {
-    fn cmp_eq(&self, other: &Self) -> bool;
-}
+// pub trait Almost: Sized + num_traits::One + num_traits::Zero {
+//     fn cmp_eq(&self, other: &Self) -> bool;
+// }
 
 /// A [`Field`] is a numeric type satisfying all field axioms, e.g., arbitrary-precision
 /// rational numbers.
@@ -112,50 +113,6 @@ impl Display for Round {
     }
 }
 
-// TODO: Cleanup, remove trait and structs.
-pub trait Rounding: Debug + Sized + Clone + Ord + Eq + Hash + Send + Sync {
-    fn rounding() -> Round;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Up;
-impl Rounding for Up {
-    fn rounding() -> Round {
-        Round::Up
-    }
-}
-impl Display for Up {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(UP)")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Near;
-impl Rounding for Near {
-    fn rounding() -> Round {
-        Round::Nearest
-    }
-}
-impl Display for Near {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(Near)")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Down;
-impl Rounding for Down {
-    fn rounding() -> Round {
-        Round::Down
-    }
-}
-impl Display for Down {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(DOWN)")
-    }
-}
-
 fn round_to_rug_round(round: Round) -> rug::float::Round {
     match round {
         Round::Nearest => rug::float::Round::Nearest,
@@ -181,7 +138,6 @@ pub trait SparseField:
     + num_traits::One
     + Display
     + Hash
-    + Almost
     + Send
     + Sync
     + sprs::MulAcc
@@ -238,7 +194,6 @@ pub trait PseudoField:
     + num_traits::One
     + Display
     + Hash
-    + Almost
     + Send
     + Sync
     + sprs::MulAcc

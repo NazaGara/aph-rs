@@ -438,9 +438,7 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
     }
 
     fn to_array_repr(&self) -> TriangularArray<F> {
-        // This can be done faster.
         let mut ta = TriangularArray::new(self.size);
-
         for n in 0..self.size {
             for m in 0..self.size {
                 if n > m {
@@ -452,7 +450,7 @@ impl<F: PseudoField> Representation<F> for Triangular<F> {
 
         ta
     }
-    // FIXME: Out of index
+
     fn kron_prod(&self, other: &Triangular<F>) -> Triangular<F> {
         let size_c = self.size() * self.size();
         let mut result = Triangular::new(size_c);

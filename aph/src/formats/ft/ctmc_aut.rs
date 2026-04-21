@@ -22,7 +22,7 @@ use crate::{
         sparse::Sparse,
         triangular::{Triangular, TriangularArray},
     },
-    utils::count_rate_by_levels,
+    utils::{count_rate_by_levels, max_value_counts},
 };
 
 #[derive(Debug)]
@@ -38,7 +38,6 @@ impl<F: PseudoField> Display for Transition<F> {
 pub struct CTMCAut<F: PseudoField> {
     pub initial: Vector<F>,
     pub states: Vec<StateCode>,
-    // pub transitions: BTreeMap<StateCode, HashMap<StateCode, F>>,
     pub generator: BTreeMap<StateCode, HashMap<StateCode, F>>,
     index: HashMap<StateCode, usize>,
 }
@@ -72,24 +71,27 @@ impl<F: PseudoField> CTMCAut<F> {
         self.index.len()
     }
 
-    pub fn to_aph(
-        &self,
+    pub fn generate_aph(
+        self,
         method: ConstructionMethod,
-        _root_id: NodeId,
+        root_id: NodeId,
         round: Round,
     ) -> BidiagonalAph<F> {
         match method {
             ConstructionMethod::Sparse => match round {
-                Round::Nearest => self.to_aph_sparse_lcs(_root_id),
-                _ => self.to_aph_sparse_lcs_round(_root_id, round),
+                Round::Nearest => {
+                    // self.new_aph_sparse_lcs(root_id),
+                    self.new_aph_sparse_lcs_new(root_id)
+                }
+                _ => self.new_aph_sparse_lcs_round(root_id, round),
             },
-            ConstructionMethod::Triangular => self.to_aph_triangular_lcs(_root_id),
-            ConstructionMethod::Matrix => self.to_aph_matrix(_root_id),
-            ConstructionMethod::CoreSeries => self.to_aph_cs(),
+            ConstructionMethod::Triangular => self.new_aph_triangular_lcs(root_id),
+            ConstructionMethod::Matrix => self.new_aph_matrix(root_id),
+            ConstructionMethod::CoreSeries => self.new_aph_cs(),
         }
     }
 
-    fn to_aph_cs(&self) -> BidiagonalAph<F> {
+    fn new_aph_cs(&self) -> BidiagonalAph<F> {
         let getter = move |i, j| self.lazy_getter(i, j);
         let bidi = (0..self.index_size())
             .map(|i| getter(i, i))
@@ -121,7 +123,7 @@ impl<F: PseudoField> CTMCAut<F> {
         }
     }
 
-    fn to_aph_matrix(&self, _root_id: NodeId) -> BidiagonalAph<F> {
+    fn new_aph_matrix(self, _root_id: NodeId) -> BidiagonalAph<F> {
         let size = self.index_size();
 
         let mut matrix = Array2::<F>::zeros((size, size));
@@ -168,14 +170,14 @@ impl<F: PseudoField> CTMCAut<F> {
         }
 
         Aph {
-            initial: self.initial.clone(),
+            initial: self.initial,
             repr: TriangularArray { size, matrix },
         }
         .spa()
     }
 
     #[allow(unused)]
-    fn to_aph_sparse(&self) -> BidiagonalAph<F> {
+    fn new_aph_sparse(self) -> BidiagonalAph<F> {
         let size = self.index_size();
 
         let mut matrix: sprs::TriMatBase<Vec<usize>, Vec<F>> = TriMat::new((size, size));
@@ -192,7 +194,6 @@ impl<F: PseudoField> CTMCAut<F> {
             for (to, rate) in self.generator[st].iter() {
                 if let Some(&idx) = self.index.get(to) {
                     // If state is indexed, we transition to new transient state.
-                    // matrix[[i, idx]].sub_assign(rate);
                     let mut neg_rate = rate.clone();
                     neg_rate.neg_assign();
                     matrix.add_triplet(i, idx, neg_rate);
@@ -207,18 +208,17 @@ impl<F: PseudoField> CTMCAut<F> {
 
             let mut exit_rate = off_diag_sum + absorb_rate;
             exit_rate.neg_assign();
-            // matrix[[i, i]] = exit_rate;
             matrix.add_triplet(i, i, exit_rate);
         }
 
         Aph {
-            initial: self.initial.clone(),
+            initial: self.initial,
             repr: Sparse { size, matrix },
         }
         .sparse_spa()
     }
 
-    fn to_aph_triangular_lcs(&self, _root_id: NodeId) -> BidiagonalAph<F> {
+    fn new_aph_triangular_lcs(self, _root_id: NodeId) -> BidiagonalAph<F> {
         let size = self.index_size();
         let mut diagonal = vec![F::zero(); size];
         let mut depths = vec![0_u32; size];
@@ -259,7 +259,7 @@ impl<F: PseudoField> CTMCAut<F> {
             matrix.set(i, i, exit_rate);
         }
         let aph = Aph {
-            initial: self.initial.clone(),
+            initial: self.initial,
             repr: matrix,
         };
 
@@ -276,7 +276,7 @@ impl<F: PseudoField> CTMCAut<F> {
         aph.spa_with_bidiagonal(bidiagonal)
     }
 
-    fn to_aph_sparse_lcs_round(&self, _root_id: NodeId, round: Round) -> BidiagonalAph<F> {
+    fn new_aph_sparse_lcs_round(self, _root_id: NodeId, round: Round) -> BidiagonalAph<F> {
         let size = self.index_size();
         let mut diagonal = vec![F::zero(); size];
         let mut depths = vec![0_u32; size];
@@ -317,10 +317,10 @@ impl<F: PseudoField> CTMCAut<F> {
             matrix.add_triplet(i, i, exit_rate);
         }
         let mut aph = Aph {
-            initial: self.initial.clone(),
+            initial: self.initial,
             repr: Sparse { size, matrix },
         };
-
+        let time_start = std::time::Instant::now();
         let counts = count_rate_by_levels_round(&depths, &diagonal, &mut aph, round);
         let mut new_diagonal: Vec<F> = vec![];
         counts.iter().for_each(|(lambda, k)| {
@@ -330,12 +330,18 @@ impl<F: PseudoField> CTMCAut<F> {
             y.partial_cmp(x)
                 .unwrap_or_else(|| panic!("Could not sort the values: {y:?} and {x:?}."))
         });
+        info!(
+            "Elapsed `LCS Round {round}`: {:?}. Size: {}.",
+            time_start.elapsed(),
+            new_diagonal.len()
+        );
         let bidiagonal = Bidiagonal::<F>::from(Vector::from(new_diagonal));
 
         aph.sparse_spa_w_bidiagonal(bidiagonal)
     }
 
-    fn to_aph_sparse_lcs(&self, _root_id: NodeId) -> BidiagonalAph<F> {
+    #[allow(unused)]
+    fn new_aph_sparse_lcs(self, _root_id: NodeId) -> BidiagonalAph<F> {
         let size = self.index_size();
 
         let mut diagonal = vec![F::zero(); size];
@@ -376,7 +382,7 @@ impl<F: PseudoField> CTMCAut<F> {
             matrix.add_triplet(i, i, exit_rate);
         }
         let aph = Aph {
-            initial: self.initial.clone(),
+            initial: self.initial,
             repr: Sparse { size, matrix },
         };
 
@@ -386,10 +392,88 @@ impl<F: PseudoField> CTMCAut<F> {
         counts.iter().for_each(|(lambda, k)| {
             new_diagonal.extend(vec![(*lambda).clone(); (*k).try_into().unwrap()])
         });
+
         new_diagonal.sort_by(|x, y| {
             y.partial_cmp(x)
                 .unwrap_or_else(|| panic!("Could not sort the values: {y:?} and {x:?}."))
         });
+
+        let bidiagonal = Bidiagonal::<F>::from(Vector::from(new_diagonal));
+        aph.sparse_spa_w_bidiagonal(bidiagonal)
+    }
+
+    #[allow(unused)]
+    fn new_aph_sparse_lcs_new(self, _root_id: NodeId) -> BidiagonalAph<F> {
+        let size = self.index_size();
+
+        let mut diagonal = vec![F::zero(); size];
+        let mut matrix: sprs::TriMatBase<Vec<usize>, Vec<F>> = TriMat::new((size, size));
+
+        for (i, st) in self.states.iter().enumerate() {
+            if st.is_abs() {
+                continue;
+            }
+            if st.is_fs() {
+                panic!("Fail safe mode is not yet supported. Requires Multi Exit PH.");
+            }
+
+            let mut absorb_rate = F::zero();
+            let mut off_diag_sum = F::zero();
+            for (to, rate) in self.generator[st].iter() {
+                if let Some(&idx) = self.index.get(to) {
+                    // If state is indexed, we transition to new transient state.
+                    let mut neg_rate = rate.clone();
+                    neg_rate.neg_assign();
+                    matrix.add_triplet(i, idx, neg_rate);
+                    off_diag_sum.sub_assign(rate);
+                } else if to.is_abs() {
+                    // If state is not transient, is to abs
+                    absorb_rate.sub_assign(rate)
+                } else {
+                    todo!("PAND not yet supported!.")
+                }
+            }
+
+            let mut exit_rate = off_diag_sum + absorb_rate;
+            exit_rate.neg_assign();
+            diagonal[i] = exit_rate.clone();
+            matrix.add_triplet(i, i, exit_rate);
+        }
+        let aph = Aph {
+            initial: self.initial,
+            repr: Sparse { size, matrix },
+        };
+
+        let time_start = std::time::Instant::now();
+
+        let adj = {
+            let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+            self.generator.iter().for_each(|(from, map)| {
+                adj.entry(self.index[from])
+                    .and_modify(|elems| elems.extend(map.keys().map(|k| self.index[k])))
+                    .or_insert(
+                        map.keys()
+                            .map(|k| *self.index.get(k).unwrap_or(&size))
+                            .collect(),
+                    );
+            });
+            adj
+        };
+
+        let mut new_diagonal: Vec<F> = vec![];
+        let counts = max_value_counts(&adj, &diagonal);
+        counts.iter().for_each(|(lambda, k)| {
+            new_diagonal.extend(vec![(*lambda).clone(); (*k).try_into().unwrap()])
+        });
+        new_diagonal.sort_by(|x, y| {
+            y.partial_cmp(x)
+                .unwrap_or_else(|| panic!("Could not sort the values: {y:?} and {x:?}."))
+        });
+        info!(
+            "Elapsed `LCS`: {:?}. Size: {}.",
+            time_start.elapsed(),
+            new_diagonal.len()
+        );
         let bidiagonal = Bidiagonal::<F>::from(Vector::from(new_diagonal));
         aph.sparse_spa_w_bidiagonal(bidiagonal)
     }
@@ -412,7 +496,6 @@ impl<F: PseudoField> CTMCAut<F> {
             });
             adj
         };
-        // let diagonal = (0..size).map(|i| getter(i, i)).collect::<Vec<F>>();
 
         // Depth check.
         fn dfs(
@@ -434,7 +517,6 @@ impl<F: PseudoField> CTMCAut<F> {
         let mut depths = vec![default_usize; size];
         dfs(0, &adj, 0, &mut depths, &decider);
         // Then, on each depth level, take all the unique rates.
-        // let counts = count_rate_by_levels(&depths, diagonal);
         let counts = count_rate_by_levels(&depths, diagonal);
 
         let mut new_diagonal: Vec<F> = vec![];

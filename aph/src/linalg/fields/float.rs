@@ -1,17 +1,3 @@
-//! Floating Point Representation with 64 bits
-//! Double-precision binary floating-point is a commonly used format on PCs, due to its wider range over single-precision
-//! floating point, in spite of its performance and bandwidth cost. It is commonly known simply as double.
-//! The IEEE 754 standard specifies a binary64 as having:
-//! - Sign bit: 1 bit
-//! - Exponent width: 11 bits
-//! - Significand precision: 53 bits (52 explicitly stored)
-//!
-//!
-//! The IEEE 754 standard specifies a binary128 as having:
-//! Sign bit: 1 bit
-//! Exponent width: 15 bits
-//! Significand precision: 113 bits (112 explicitly stored)
-
 use std::{
     fmt::{Debug, Display},
     ops::{Add, Div, Mul, Sub},
@@ -27,28 +13,28 @@ use rug::{
     },
 };
 
-const SIGNIFICAND: u32 = 53;
+const SIGNIFICAND: u32 = 256;
 
 /// A 64-bit floating-point type implementing [`SparseField`].
 ///
 /// Currently this is based on [`rug::Float`] but in the future we may implement this
 /// type using architecture specific features.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Float64(rug::float::OrdFloat);
+pub struct CustomFloat(rug::float::OrdFloat);
 
-impl sprs::MulAcc for Float64 {
+impl sprs::MulAcc for CustomFloat {
     fn mul_acc(&mut self, a: &Self, b: &Self) {
         self.add_assign(&(a.clone() * b.clone()), Round::Nearest)
     }
 }
 
-impl Debug for Float64 {
+impl Debug for CustomFloat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0.as_float())
     }
 }
 
-impl Float64 {
+impl CustomFloat {
     pub fn is_nan(&self) -> bool {
         self.0.as_float().is_nan()
     }
@@ -57,13 +43,13 @@ impl Float64 {
     }
 }
 
-impl From<rug::Float> for Float64 {
+impl From<rug::Float> for CustomFloat {
     fn from(value: rug::Float) -> Self {
         Self(OrdFloat::from(value))
     }
 }
 
-impl Display for Float64 {
+impl Display for CustomFloat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut val = self.0.as_float().clone();
         val.set_prec_round_64(SIGNIFICAND as u64, rug::float::Round::Nearest);
@@ -71,7 +57,7 @@ impl Display for Float64 {
     }
 }
 
-impl FromRational for Float64 {
+impl FromRational for CustomFloat {
     fn from_rational(numerator: &str, denominator: &str) -> Self {
         let num = Float::parse(numerator).unwrap().complete(SIGNIFICAND);
         let den = Float::parse(denominator).unwrap().complete(SIGNIFICAND);
@@ -79,7 +65,7 @@ impl FromRational for Float64 {
     }
 }
 
-impl ToRational for Float64 {
+impl ToRational for CustomFloat {
     fn to_rational(&self) -> (String, String) {
         let ratio = Ratio::from_float(self.0.as_float().to_f64_round(rug::float::Round::Nearest))
             .expect("Something went wrong when converting the Float to Rational.");
@@ -87,9 +73,9 @@ impl ToRational for Float64 {
     }
 }
 
-impl num_traits::Zero for Float64 {
+impl num_traits::Zero for CustomFloat {
     fn set_zero(&mut self) {
-        *self = Float64(rug::Float::with_val(SIGNIFICAND, 0.0).into());
+        *self = CustomFloat(rug::Float::with_val(SIGNIFICAND, 0.0).into());
     }
 
     fn zero() -> Self {
@@ -98,13 +84,10 @@ impl num_traits::Zero for Float64 {
 
     fn is_zero(&self) -> bool {
         *self.0.as_float() == 0.0
-        // let mut self_abs = self.clone();
-        // self_abs.abs_assign();
-        // self_abs.le(&Self::epsilon())
     }
 }
 
-impl num_traits::One for Float64 {
+impl num_traits::One for CustomFloat {
     fn is_one(&self) -> bool {
         *self.0.as_float() == 1.0
     }
@@ -113,23 +96,23 @@ impl num_traits::One for Float64 {
         Self(rug::Float::with_val(SIGNIFICAND, 1.0).into())
     }
     fn set_one(&mut self) {
-        *self = Float64(rug::Float::with_val(SIGNIFICAND, 1.0).into());
+        *self = CustomFloat(rug::Float::with_val(SIGNIFICAND, 1.0).into());
     }
 }
 
-impl From<f64> for Float64 {
+impl From<f64> for CustomFloat {
     fn from(value: f64) -> Self {
         Self(rug::Float::with_val_64(SIGNIFICAND as u64, value).into())
     }
 }
 
-impl From<Float64> for f64 {
-    fn from(float: Float64) -> Self {
+impl From<CustomFloat> for f64 {
+    fn from(float: CustomFloat) -> Self {
         float.0.as_float().to_f64()
     }
 }
 
-impl SparseField for Float64 {
+impl SparseField for CustomFloat {
     fn neg_assign(&mut self) {
         self.0.as_float_mut().neg_assign()
     }
@@ -177,7 +160,7 @@ impl SparseField for Float64 {
     }
 }
 
-impl Add for Float64 {
+impl Add for CustomFloat {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(
@@ -189,7 +172,7 @@ impl Add for Float64 {
     }
 }
 
-impl Mul for Float64 {
+impl Mul for CustomFloat {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(
@@ -201,7 +184,7 @@ impl Mul for Float64 {
     }
 }
 
-impl Sub for Float64 {
+impl Sub for CustomFloat {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
         let mut neg_rhs = rhs.clone();
@@ -215,7 +198,7 @@ impl Sub for Float64 {
     }
 }
 
-impl Div for Float64 {
+impl Div for CustomFloat {
     type Output = Self;
     fn div(self, rhs: Self) -> Self::Output {
         Self(OrdFloat::from(

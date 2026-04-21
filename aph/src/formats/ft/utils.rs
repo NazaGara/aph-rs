@@ -14,6 +14,8 @@ use crate::representation::sparse::Sparse;
 pub enum RoundMode {
     Depth,
     Mix,
+    DepthTLE,
+    MixTLE,
 }
 
 #[derive(Debug, Copy, Clone, ValueEnum, Serialize, Deserialize)]
@@ -59,13 +61,15 @@ pub(crate) fn count_rate_by_levels_round<F: PseudoField>(
             };
             //TODO: To put a condition like relative tolerance (|lambda - mu| < |mu| * e) on the changes, we must also consider the counts.
             // So, it is better to map the changes first, and then do it.
-            counts
-                .entry(value.clone())
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
 
-            // create the new vector dropping the third element,
-            // but replacing all middle values by the max
+            if let Some(count) = counts.get_mut(value) {
+                *count += 1;
+            } else {
+                counts.insert(value.clone(), 1);
+            }
+
+            // create the new vector dropping the third element (depth),
+            // and replaces all values by the chosen value
             values
                 .iter()
                 .map(|(a, _, _)| (*a, value.clone()))
@@ -100,36 +104,3 @@ pub(crate) fn count_rate_by_levels_round<F: PseudoField>(
     *aph = new_aph;
     counts
 }
-
-/*
-for (row, lambda) in idx_value_vec.into_iter() {
-    let mu = diagonal.get(row).unwrap();
-    let mut thresh = mu.clone();
-    thresh.abs_assign();
-    thresh.mul_assign(&F::from(f64::EPSILON));
-    let mut diff = mu.clone();
-    diff.sub_assign(&lambda);
-    diff.abs_assign();
-
-    if diff.gt(&thresh) {
-        // debug!("NOT Replacing {mu} by {lambda}.");
-        for col in row + 1..size {
-            if let Some(mu_i) = matrix.get(row, col) {
-                trimat.add_triplet(row, col, mu_i.clone());
-            }
-        }
-        trimat.add_triplet(row, row, mu.clone());
-    } else {
-        debug!("Replacing {mu} by {lambda}: {diff} <= {thresh}");
-        for col in row + 1..size {
-            if let Some(mu_i) = matrix.get(row, col) {
-                let mut new_val = mu_i.clone();
-                new_val.div_assign(mu);
-                new_val.mul_assign(&lambda);
-                trimat.add_triplet(row, col, new_val);
-            }
-        }
-        trimat.add_triplet(row, row, lambda.clone());
-    }
-}
-*/

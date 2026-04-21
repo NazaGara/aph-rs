@@ -130,7 +130,7 @@ impl PartialOrd for StateCode {
 // --- State Representation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
-    Transient(BTreeMap<NodeId, Status>), // BTreeMap outperforms IndexMap.
+    Transient(BTreeMap<NodeId, Status>),
     Absorbing,
     Locked,
 }
@@ -225,7 +225,7 @@ impl Display for State {
 
 impl State {
     /// Advance the component indexed by [nid] to the next phase in the [self] state.
-    /// The [aph_size] parameter specifies if the next status of the component should be [Status::Failed], or continue working.
+    /// `aph_size` specifies if the next status of the component should be [Status::Failed], or continue working.
     /// Thus, we can use it to activate children from sequence enforcers.
     pub(crate) fn take_transition_from(&self, nid: &NodeId, aph_size: u16) -> Self {
         match &self {

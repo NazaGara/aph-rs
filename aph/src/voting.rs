@@ -6,7 +6,7 @@ use std::{cmp::Ordering, collections::HashMap};
 
 use crate::{Aph, BidiagonalAph, linalg, representation};
 
-pub fn build_vot_bidiagonal<'a, F: PseudoField + 'a>(
+pub fn _build_vot_bidiagonal<'a, F: PseudoField + 'a>(
     inputs: Vec<&'a BidiagonalAph<F>>,
     k: u32,
 ) -> BidiagonalAph<F> {
@@ -90,8 +90,7 @@ pub fn build_vot_bidiagonal<'a, F: PseudoField + 'a>(
     .spa()
 }
 
-#[allow(unused)]
-pub fn build_vot_tr<'a, F: PseudoField + 'a>(
+pub fn _build_vot_tr<'a, F: PseudoField + 'a>(
     inputs: Vec<&'a BidiagonalAph<F>>,
     k: u32,
 ) -> Aph<F, TriangularArray<F>> {
@@ -192,10 +191,12 @@ fn combinations<T: Clone>(data: &[Vec<T>], k: usize) -> Vec<Vec<T>> {
     result
 }
 
-pub fn build_vot_bidi<F: PseudoField>(inputs: Vec<&BidiagonalAph<F>>, k: u32) -> BidiagonalAph<F> {
+pub fn build_vot_bidi<F: PseudoField>(inputs: &[&BidiagonalAph<F>], k: u32) -> BidiagonalAph<F> {
     // We fix some rate and amount, check all combinations with other rates from other inputs.
     // I can have combinations of sizes N to N-K.
     // We add all the rates that are combined, and we see each the number of times they appear, minus one.
+
+    // WIP: Use depth method to find bounds.
 
     let n = inputs.len() as u32;
     let p_list: Vec<u32> = inputs
@@ -267,7 +268,7 @@ pub fn build_vot_bidi<F: PseudoField>(inputs: Vec<&BidiagonalAph<F>>, k: u32) ->
     let delta = vot_initial_distribution(&initials, &p_list, &transient_states);
 
     // Lazy getter
-    let getter = move |i, j| lazy_vot_getter::<F>(&inputs, &transient_states, i, j);
+    let getter = move |i, j| lazy_vot_getter::<F>(inputs, &transient_states, i, j);
 
     Aph::<F, Bidiagonal<F>>::spa_with_getter(&delta, &getter, bidiagonal)
 }
@@ -282,8 +283,6 @@ fn lazy_vot_getter<F: PseudoField>(
     if j < i {
         F::zero()
     } else if i == j {
-        //TODO:
-        // sum of the exit rates of the non finished states.
         let st: Vec<(usize, &i32)> = states[i].iter().enumerate().collect();
         let mut sum = F::zero();
 
@@ -332,7 +331,7 @@ fn vot_initial_distribution<F: PseudoField>(
 ) -> Vector<F> {
     let n = initials.len();
 
-    let mut pi0: Vector<F> = Vector::zeros(states.len()); //vec![F::zero(); states.len()];
+    let mut pi0: Vector<F> = Vector::zeros(states.len());
     for (idx, s) in states.iter().enumerate() {
         let mut prob = F::one();
         for i in 0..n {

@@ -143,8 +143,6 @@ pub fn get_modules(ft: &ParsedTree) -> Vec<NodeId> {
         .map(|(k, v)| (v, k))
         .collect::<HashMap<NodeId, String>>();
 
-    // TODO: What do we do if a Gate is triggered? Usually is not allowed.
-
     let children: IndexVec<NodeId, Vec<NodeId>> = ft
         .nodes
         .iter()

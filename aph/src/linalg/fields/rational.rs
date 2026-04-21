@@ -4,7 +4,7 @@ use std::{
     ops::{Add, AddAssign, DivAssign, Mul, MulAssign, Sub, SubAssign},
 };
 
-use super::{Almost, FromRational, PseudoField, ToRational};
+use super::{FromRational, PseudoField, ToRational};
 use ndarray::ScalarOperand;
 use rug::{
     Complete,
@@ -33,12 +33,6 @@ impl Rational {
 
     pub fn size(&self) -> (usize, usize) {
         (self.numer().len(), self.denom().len())
-    }
-}
-
-impl Almost for Rational {
-    fn cmp_eq(&self, other: &Self) -> bool {
-        self.eq(other)
     }
 }
 

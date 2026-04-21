@@ -12,7 +12,7 @@ use crate::linalg::fields::Round;
 use crate::operations::{lazy_kron_sum, lazy_max_block};
 use crate::representation::sparse::Sparse;
 use crate::representation::{self, bidiagonal::Bidiagonal};
-use crate::utils::{_bound_cs, find_rate_replacement, merge_tuple_vec};
+use crate::utils::{bound_cs, find_rate_replacement, merge_tuple_vec};
 use crate::{Aph, BidiagonalAph, linalg};
 use representation::Representation;
 
@@ -38,7 +38,7 @@ pub fn _min_round<F: PseudoField>(
     info!("Splitting at {split_index} of {}.", rate_count_ph2.len());
 
     let (to_use_vec, new_remanents, mapper) =
-        _bound_cs::<F>(&rate_count_ph1, &rate_count_ph2, split_index, round);
+        bound_cs::<F>(&rate_count_ph1, &rate_count_ph2, split_index, round);
 
     // Incorporate changes and also run spa if the new rates are disordered.
     let _: Vec<_> = mapper
@@ -103,7 +103,7 @@ pub fn _max_round<F: PseudoField>(
     let split_index = usize::max(1, (rate_count_ph2.len() as f64 * percentage) as usize);
 
     let (to_use_vec, remanent_vec, mapper) =
-        _bound_cs::<F>(&rate_count_ph1, &rate_count_ph2, split_index, round);
+        bound_cs::<F>(&rate_count_ph1, &rate_count_ph2, split_index, round);
     // Incorporate changes and also run spa if the new rates are disordered.
     let _: Vec<_> = mapper
         .into_iter()
@@ -189,7 +189,7 @@ pub fn _max_round<F: PseudoField>(
     Aph::<F, Bidiagonal<F>>::spa_with_getter(&delta.into(), &getter, bidiagonal)
 }
 
-pub fn min_round_by_level<F: PseudoField>(
+pub fn mininimum_round_depth<F: PseudoField>(
     ph1: &BidiagonalAph<F>,
     ph2: &BidiagonalAph<F>,
     round: Round,
@@ -268,7 +268,7 @@ pub fn min_round_by_level<F: PseudoField>(
     aph.sparse_spa_w_bidiagonal(bidiagonal)
 }
 
-pub fn max_round_by_level<F: PseudoField>(
+pub fn maximum_round_depth<F: PseudoField>(
     ph1: &BidiagonalAph<F>,
     ph2: &BidiagonalAph<F>,
     round: Round,
@@ -399,7 +399,7 @@ pub fn max_round_by_level<F: PseudoField>(
 }
 
 #[allow(unused)]
-pub fn min_round_1<F: PseudoField>(
+pub fn minimum_round<F: PseudoField>(
     ph1: &BidiagonalAph<F>,
     ph2: &BidiagonalAph<F>,
     round: Round,
@@ -463,7 +463,7 @@ pub fn min_round_1<F: PseudoField>(
     Aph::<F, Bidiagonal<F>>::spa_with_getter(&delta, &getter, bidiagonal)
 }
 
-pub fn max_round_1<F: PseudoField>(
+pub fn maximum_round<F: PseudoField>(
     ph1: &BidiagonalAph<F>,
     ph2: &BidiagonalAph<F>,
     round: Round,

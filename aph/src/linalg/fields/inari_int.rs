@@ -3,7 +3,7 @@ use std::{
     ops::{Add, Mul, Sub},
 };
 
-use super::{Almost, FromRational, PseudoField, ToRational};
+use super::{FromRational, PseudoField, ToRational};
 use inari::*;
 use num_rational::Ratio;
 use num_traits::Zero;
@@ -101,36 +101,6 @@ impl ToRational for Interval {
         let ratio = Ratio::from_float(self.0.mid())
             .expect("Something went wrong when converting the Interval to Rational.");
         (ratio.numer().to_string(), ratio.denom().to_string())
-    }
-}
-
-impl Almost for Interval {
-    fn cmp_eq(&self, other: &Self) -> bool {
-        let abstol = Self::from_rational("1", "10000000");
-        let epsi = Self::from_rational("1", "10000");
-
-        if self.eq(other) {
-            return true;
-        }
-        let mut diff = self.clone().sub(other.clone());
-        diff.abs_assign();
-
-        if diff.le(&abstol) {
-            return true;
-        }
-
-        let mut self_abs = self.clone();
-        self_abs.abs_assign();
-        let mut other_abs = other.clone();
-        other_abs.abs_assign();
-
-        let reltol = (if self_abs.ge(&other_abs) {
-            self_abs
-        } else {
-            other_abs
-        })
-        .mul(epsi.clone());
-        diff.le(&reltol)
     }
 }
 

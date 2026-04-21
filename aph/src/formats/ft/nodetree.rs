@@ -92,12 +92,11 @@ pub(crate) struct Metadata {
     pub(crate) has_sequences: bool,
     pub(crate) has_spares: bool,
     pub(crate) has_dependencies: bool,
-    pub(crate) min_max_vot_seq: bool,
+    pub(crate) min_max_seq_vot: bool,
     pub(crate) is_independent: bool,
     pub(crate) warm_spares: Vec<NodeId>,
 }
 
-// TODO: Only a ref to the nodes?
 #[derive(Debug)]
 pub(crate) struct NodeTree<F: PseudoField> {
     pub root_id: NodeId,
@@ -108,7 +107,7 @@ pub(crate) struct NodeTree<F: PseudoField> {
 #[allow(unused)]
 impl<F: PseudoField> NodeTree<F> {
     pub fn is_static(&self) -> bool {
-        self.metadata.min_max_vot_seq
+        self.metadata.min_max_seq_vot
     }
 
     pub fn is_independent(&self) -> bool {
@@ -178,7 +177,7 @@ impl<F: PseudoField> NodeTree<F> {
         let (_, _comp_from_triggers, triggered_ids) = self.all_triggers();
         let mut metadata = Metadata::default();
         let mut seen_twice = false;
-        let mut warm_child = vec![];
+        let mut warm_childs = vec![];
         let mut requires_expl = false;
 
         vis_nodes
@@ -192,8 +191,12 @@ impl<F: PseudoField> NodeTree<F> {
                     if matches!(node, FTNode::Gate(GateType::Pand(_), _)) {
                         todo!("Priority AND not yet supported.");
                     }
+                    // We can handle Vot gates with its own compressed exploration.
+                    // if matches!(node, FTNode::Gate(GateType::KofN(_), _)) {
+                    //     requires_expl = true;
+                    // }
                     if matches!(node, FTNode::Gate(GateType::Wsp(_), _)) {
-                        warm_child.extend(node.children().unwrap());
+                        warm_childs.extend(node.children().unwrap());
                         requires_expl = true;
                         metadata.has_spares = true;
                     }
@@ -214,9 +217,9 @@ impl<F: PseudoField> NodeTree<F> {
                 }
             });
 
-        metadata.min_max_vot_seq = !requires_expl;
+        metadata.min_max_seq_vot = !requires_expl;
         metadata.is_independent = !seen_twice;
-        metadata.warm_spares = warm_child;
+        metadata.warm_spares = warm_childs;
 
         metadata
     }
@@ -315,7 +318,6 @@ impl<F: PseudoField> NodeTree<F> {
         let restrictions = if self.has_sequences() {
             let mut restrictions: Vec<Restriction> = restrictions.into_iter().flatten().collect();
 
-            // TODO: We must consider all the restrictions from above.
             let res_ids = restrictions
                 .iter()
                 .flat_map(|r| self.get_child_from_node(r.restricted_id()))
@@ -448,7 +450,6 @@ impl<F: PseudoField> NodeTree<F> {
                 }
                 // If there are no restrictions, in particular, there are no spares.
                 // So we dont have to find a new CuC for spares if there is none.
-                // TODO: Can we somehow skip this clone?
                 State::Transient(map) => State::Transient(map.to_owned()),
             }
         };

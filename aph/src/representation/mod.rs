@@ -18,7 +18,6 @@ pub trait Representation<F: PseudoField> {
     /// # Panics
     ///
     /// Panics if the access is out-of-bounds.
-    // TODO: Add a view method that does not clone in each get. Wasteful.
     fn get(&self, row: usize, column: usize) -> F;
 
     /// Sets a value at the the given row and column.
@@ -74,19 +73,22 @@ pub trait Representation<F: PseudoField> {
         let size = self.size();
         let mut transitions: Vec<(usize, usize)> = vec![];
         for i in 0..size {
+            let mut total_exit_rate = self.diagonal(i);
             for j in i + 1..size {
                 if !self.get(i, j).is_zero() {
                     transitions.push((i, j));
+                    total_exit_rate.add_assign(&self.get(i, j));
                 }
+            }
+            if !total_exit_rate.is_zero() {
+                transitions.push((i, size));
             }
         }
         let mut map: HashMap<usize, Vec<usize>> = HashMap::new();
         transitions.iter().for_each(|(from, to)| {
-            if *to != size + 1 {
-                map.entry(*from)
-                    .and_modify(|elems| elems.push(*to))
-                    .or_insert(vec![*to]);
-            }
+            map.entry(*from)
+                .and_modify(|elems| elems.push(*to))
+                .or_insert(vec![*to]);
         });
         map
     }
